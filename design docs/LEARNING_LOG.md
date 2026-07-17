@@ -3,6 +3,43 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-16 — Scalability restructure: git + monorepo workspace (steps 1–2)
+
+Put the project under git + GitHub (`github.com/brody327/OpenMWAnalytics`) and
+restructured into an npm-workspaces monorepo, isolating the OpenMW-loaded files
+under `mod/` so the game sees only the mod, not the platform code. Verified
+in-game: fresh launch loaded both scripts from `mod/` (no Lua/JS edits needed).
+
+**Concepts covered:**
+- **Repo topology vs deployment topology are independent axes** — "runs in a
+  different place" does not imply "belongs in a different repo." Split the two
+  questions before deciding.
+- **The real coupling boundary** isn't website-vs-mod; it's *ship-to-players
+  (frozen at install, un-updatable)* vs *operate-yourself (continuously
+  deployable)*. The `OMWA1` wire envelope is the API between those two worlds.
+- **Monorepo vs polyrepo as cost/benefit, not dogma** — polyrepo buys independent
+  deploy + access control; with one committer that benefit is unspendable and the
+  cost (cross-repo contract changes, version skew) is pure overhead. Defer the
+  split until a real forcing function appears.
+- **Portfolio signal** — building the *seams* (workspace boundaries, shared
+  contract) while *skipping the ceremony* (polyrepo) is the senior/staff move; the
+  reflex to over-split reads as junior.
+- **`data=` is a pointer; paths resolve relative to the VFS root** — re-pointing
+  `data=` at `mod/` kept `scripts/omwanalytics/...` valid with zero code edits.
+  General principle: relative paths + a relocatable root = portable code.
+- **git hygiene** — gitignore `.env` *before* it ever holds a real secret (history
+  is permanent); `src refspec main does not match any` = no commits yet, not a
+  GitHub problem (a branch is only real once it has a commit).
+
+**Checkpoint quiz: 3/3** — repo-topology justification, wire-version compatibility
+(frozen-client asymmetry), and VFS path resolution. All reasoned answers over the
+plausible traps. No weak spots to revisit.
+
+**Next:** step 3 — extract `packages/contract` (Zod + TS types) as the single
+JS/TS source of truth for the envelope (Lua stays the one cross-language mirror);
+then step 4 — internal `track.lua` helper. Optional: physically relocate the repo
+out of the game data dir (user-driven).
+
 ## 2026-07-15 — Instrumentation model (`08`) — design discussion
 
 **Concepts covered:** OpenMW **sandbox isolation** (no cross-script access, no
