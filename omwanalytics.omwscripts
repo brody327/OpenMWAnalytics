@@ -1,0 +1,4 @@
+# OpenMW Analytics — ingestion spike
+GLOBAL: scripts/omwanalytics/telemetry.lua
+# Player-context area detector -> forwards AreaEntered to the global emitter.
+PLAYER: scripts/omwanalytics/player.lua

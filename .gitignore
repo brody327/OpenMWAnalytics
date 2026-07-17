@@ -1,0 +1,28 @@
+# --- Dependencies -----------------------------------------------------------
+# Matches node_modules at any depth (api/, future packages/*, dashboard/, ...).
+node_modules/
+
+# --- Build output -----------------------------------------------------------
+dist/
+build/
+*.tsbuildinfo
+
+# --- Secrets / local env ----------------------------------------------------
+# Never commit real env files. The *.example files ARE committed as the
+# documented template. Keep it this way BEFORE .env ever holds a real secret:
+# git history is permanent, so an untracked secret is a non-event, a tracked
+# one is a history rewrite.
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# --- Logs / runtime scratch -------------------------------------------------
+*.log
+*.pid
+
+# --- Editor / OS cruft ------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+*.swp

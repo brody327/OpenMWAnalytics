@@ -1,0 +1,22 @@
+# Local Postgres for development. Disposable: `docker compose down -v` wipes it.
+services:
+  db:
+    image: postgres:16
+    container_name: omwanalytics-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: omwa
+      POSTGRES_PASSWORD: omwa_dev_pw
+      POSTGRES_DB: omwanalytics
+    ports:
+      - "5432:5432"
+    volumes:
+      - omwa_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omwa -d omwanalytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  omwa_pgdata:
