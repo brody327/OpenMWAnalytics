@@ -1,0 +1,19 @@
+{
+  "name": "openmw-analytics",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Telemetry & analytics platform for OpenMW mods — event ingestion pipeline, API, and dashboard.",
+  "type": "module",
+  "workspaces": [
+    "api",
+    "shipper",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "api": "npm run dev --workspace api",
+    "ship": "npm run start --workspace shipper"
+  }
+}
