@@ -1,7 +1,7 @@
 # 07 — Dashboard (the query side)
 
-**Status:** 🟡 in progress. Query API endpoint built + verified (`/stats/confrontations`);
-Next.js frontend next.
+**Status:** 🟢 first view live (2026-07-18): `/stats/confrontations` query endpoint +
+a Next.js pass-rate dashboard (`dashboard/`), verified rendering against live data.
 
 The dashboard is the **read half** of the platform — where the event log becomes
 answers. `01`'s thesis is "actionable insight, not raw counts" (*"Puzzle 7 has a 71%

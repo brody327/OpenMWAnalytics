@@ -15,7 +15,7 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `04_SHIPPER_DESIGN.md` | The Node log-tailing shipper: offset tracking, truncation handling, batching, retries, at-least-once. | ✅ reliability pass done 2026-07-18 (durable offset, relaunch detection, at-least-once); doc written |
 | `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested |
 | `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented |
-| `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes. | 🟡 query endpoint built (`/stats/confrontations`); Next.js frontend next |
+| `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes. | 🟢 first view live: `/stats/confrontations` + Next.js pass-rate dashboard |
 | `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ✅ SDK built (`OMWA_Track` + `track.lua`); auto path still open |
 | `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |
 

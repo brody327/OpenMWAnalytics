@@ -3,6 +3,37 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-18 (cont.) — Dashboard: query API + Next.js consumer (`07`)
+
+Built the read side: `GET /stats/confrontations` (Express, aggregation SQL) + a
+Next.js App Router dashboard consuming it. First view = confrontation pass-rate.
+Verified: page SSRs live data (3 attempts, 0% pass, topic "name_at_scene").
+
+**Concepts covered:**
+- **Event store vs analytics API** — the query endpoint returns *answers*
+  (`{topic, attempts, pass_rate}`), never raw rows; aggregation happens in SQL where
+  the index + data live. JSONB extraction in GROUP BY, `avg(bool::int)` for a rate,
+  `count(*) FILTER (WHERE …)` for slices in one scan.
+- **Clean consumer/producer boundary** — Express owns data access; Next.js is a pure
+  consumer. A **Server Component fetches the API server-side** (no CORS, nothing
+  secret in the browser) and passes plain data to a `'use client'` Recharts component.
+  We deliberately did NOT query Postgres from Next — that would split data access.
+- **RSC as the fetch boundary; `'use client'` as the interactivity boundary** — charts
+  (SVG + hooks) must be client; the page stays a server component.
+- **Read the version's own docs, not memory** — this was Next.js **16** (newer than
+  training); its `AGENTS.md` said read `node_modules/next/dist/docs/` first. Did so —
+  confirmed fetch-is-uncached-by-default and current RSC/data patterns before coding.
+- **Recharts + CSS vars gotcha** — `var()` doesn't resolve in SVG *presentation
+  attributes*, so theme colors are detected in-component (matchMedia) and passed as
+  concrete hexes from the dataviz skill's validated palette.
+
+Frontend is the user's wheelhouse (senior Angular/TS), so teaching stayed on the query
+layer. **No quiz** (frontend not the learning target). Stack = Next.js by user choice
+(target-job alignment).
+
+**Next:** richer confrontation data (passes, pattern-kind, more suspects) from play;
+more `/stats/*` views (AreaEntered); the passive/auto `SkillProgression` event.
+
 ## 2026-07-18 (cont.) — Shipper reliability: at-least-once delivery (`04`)
 
 Fixed the shipper gap that dropped session `ce7bd7c4` (and a worse latent bug).
