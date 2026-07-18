@@ -43,7 +43,7 @@ manual file import. Clean service boundary.
 | Component | Tech | Responsibility |
 | --- | --- | --- |
 | **Mod (emitter)** | Lua (OpenMW) | Detect gameplay, build events, `print()` `OMWA1 <json>` lines. Stamp identity. |
-| **Shipper** | Node/TS | Tail `openmw.log`, extract our lines, batch, POST to API. Own transport reliability (offset tracking, truncation detection, retries). |
+| **Shipper** | Node/TS | Tail `openmw.log`, extract our lines, batch, POST to API. Owns transport reliability — durable offset, relaunch detection, at-least-once (implemented, `04`). |
 | **API** | Node/TS (Express/Nest) | Validate + accept events (ingest), serve aggregates (query). |
 | **Database** | Postgres | Durable event store; aggregation queries. |
 | **Dashboard** | React / Next.js | Answer product questions from the data. |
@@ -65,10 +65,12 @@ Proven in the real game, not assumed:
 
 ## Known constraints & risks (carry forward)
 
-- **Log truncation:** `openmw.log` is overwritten on each launch → the shipper must
-  detect truncation (offset > filesize ⇒ reset). Handled in the spike.
-- **No delivery guarantee from `print()`** → at-least-once achieved by the shipper
-  persisting a read offset; consumer must dedup. See `02` delivery contract.
+- **Log truncation / relaunch:** `openmw.log` is recreated each launch → the shipper
+  detects a new file by **first-line fingerprint** (not just `size < offset`, which
+  missed a relaunch live) and reships from the top. Implemented (`04 §3.3`).
+- **No delivery guarantee from `print()`** → **at-least-once** via the shipper's
+  durable offset + post-then-checkpoint, made safe by the API's idempotent upsert on
+  `(session_id, seq)`. Implemented (`04 §2`); see `02` delivery contract.
 - **Weak RNG** in the sandbox (`math.random`, engine-seeded) → fine for anonymous
   ids, never for anything security-bearing.
 - **UTF-8 / escaping** in log lines → our JSON encoder escapes control chars.
