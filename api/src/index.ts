@@ -5,6 +5,7 @@ import express, {
   type NextFunction,
 } from 'express';
 import { ingest } from './events/ingest.js';
+import { confrontations } from './stats/confrontations.js';
 
 const app = express();
 app.use(express.json());
@@ -16,6 +17,9 @@ app.get('/health', (_req: Request, res: Response) => {
 
 // Ingestion.
 app.post('/events', ingest);
+
+// Query / read side (aggregations for the dashboard).
+app.get('/stats/confrontations', confrontations);
 
 // Central error handler (Express 5 forwards async rejections here).
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
