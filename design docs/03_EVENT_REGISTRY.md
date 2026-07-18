@@ -55,8 +55,10 @@ Ascadian Isles emits one event. Low volume, every row answers the question.
 
 **Trigger / detection:** a player-context script (`scripts/omwanalytics/player.lua`)
 polls `self.cell` (~4×/s) and compares an `interior:area` key to the last one; on
-change it `sendGlobalEvent('OMWA_Emit', …)` to the global emitter, which assigns the
-`seq`/identity envelope. Polling (not `onTeleported`) is required because seamless
+change it calls `track('AreaEntered', …)` (the `track.lua` SDK helper, which sends
+`OMWA_Track`) to the global emitter, which assigns the `seq`/identity envelope —
+first-party dogfooding of the same path third parties use. Polling (not
+`onTeleported`) is required because seamless
 exterior walking never fires a teleport. *Regionless exterior cells and unnamed
 interiors are skipped* (we can't name a meaningful area, so we emit nothing rather
 than noise).
@@ -105,10 +107,12 @@ on mid-attempt UI (claim selection, adding/removing a board piece, opening the
 ledger). Failed attempts are the point: they carry the difficulty/funnel signal.
 
 **Trigger / detection:** CCFF's `scripts/ccff/confront_panel.lua` (a PLAYER script)
-calls `core.sendGlobalEvent('OMWA_Emit', { type = 'ConfrontationAttempted', data =
-… })`. The global event crosses the mod boundary through OpenMW's shared global-event
-namespace and lands in our `telemetry.lua`, which assigns the identity + `seq`
-envelope. If OMWA is not installed the event is simply unhandled (fire-and-forget).
+calls `track('ConfrontationAttempted', …)` via a **guarded** `require` of the
+`scripts.omwanalytics.track` SDK helper (which sends `OMWA_Track`). The global event
+crosses the mod boundary through OpenMW's shared global-event namespace and lands in
+our `telemetry.lua`, which re-validates it (type/shape + key/size caps) and assigns
+the identity + `seq` envelope. If OMWA is not installed the guarded require yields
+nil and the calls are no-ops (fire-and-forget, no load error).
 
 **`data` shape:**
 
@@ -130,8 +134,8 @@ OMWA1 {"v":1,"type":"ConfrontationAttempted","seq":12,"install_id":"e2a9…","se
   vocabulary (it owns this event's `data`), safe to extend additively.
 - No API/DB change: generic transport stores a new `type` with zero DDL, `data` in
   JSONB. Proven by `AreaEntered`.
-- This event's existence — a *foreign* mod writing tracking calls into its own
-  source — is the trigger to revisit the deferred public SDK in `08 §5` (rename
-  `OMWA_Emit` → a stable `OMWA_Track`, ship a `track.lua` helper, add emitter-side
-  payload validation for the semi-trusted caller). Deliberately **not** done yet:
-  extract the SDK *from* this working integration, don't design it ahead of one.
+- This event — a *foreign* mod writing tracking calls into its own source — was the
+  forcing function for the public SDK, now **built (2026-07-18, see `08 §5`)** and
+  extracted *from* this integration: `OMWA_Track` single validated ingress + the
+  `track.lua` helper + emitter-side payload validation. CCFF was refactored from the
+  raw `sendGlobalEvent` to the guarded helper as the SDK's first consumer.

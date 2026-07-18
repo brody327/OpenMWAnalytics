@@ -5,16 +5,18 @@
 -- Why a separate player script? Area is player-context: only a local script
 -- attached to the player can read `self.cell`. Identity and the single per-session
 -- `seq` stream live in the GLOBAL script (telemetry.lua), so we do NOT emit here --
--- we forward via core.sendGlobalEvent and let the global emit() stamp the envelope.
--- That keeps one monotonic seq stream instead of two competing counters.
+-- we forward via the track() SDK helper (which sends OMWA_Track) and let the global
+-- emit() stamp the envelope. That keeps one monotonic seq stream, not two counters.
 --
 -- Grain = meaningful area (see design docs/03_EVENT_REGISTRY.md):
 --   exterior -> region id (cell.region) ; interior -> cell name (cell.name).
 -- Unnamed exterior grid cells collapse to their region (low cardinality, high
 -- signal). Cells we can't name (regionless exterior, unnamed interior) are skipped.
 
-local self = require('openmw.self')
-local core = require('openmw.core')
+local self  = require('openmw.self')
+-- First-party use of our own public SDK helper (dogfooding). Unguarded require:
+-- track.lua always ships in this mod, so unlike a third party we don't pcall it.
+local track = require('scripts.omwanalytics.track')
 
 local THROTTLE = 0.25   -- s; the cell changes rarely, no need to check every frame
 local accum = 0
@@ -42,10 +44,7 @@ local function check()
     local key = (interior and 'in:' or 'ex:') .. area   -- namespace so an interior
     if key == lastKey then return end                   -- can't collide with a region
     lastKey = key
-    core.sendGlobalEvent('OMWA_Emit', {
-        type = 'AreaEntered',
-        data = { area = area, interior = interior },
-    })
+    track('AreaEntered', { area = area, interior = interior })
 end
 
 return {

@@ -1,9 +1,11 @@
 # 08 — Instrumentation Model (how mechanics become events)
 
-**Status:** 🟡 model decided; public SDK **deferred** (YAGNI — one consumer today).
-This doc records *how* a game/mod mechanic gets turned into an `AreaEntered`-style
-event, and the "mod vs platform" decision it implies. No implementation beyond the
-existing seam is committed here.
+**Status:** 🟢 model decided; public SDK **built 2026-07-18** (single validated
+`OMWA_Track` ingress + require-able `track.lua` helper; first consumer = CCFF's
+`ConfrontationAttempted`). This doc records *how* a game/mod mechanic gets turned
+into an `AreaEntered`-style event, and the "mod vs platform" decision it implies.
+See §5 for the shipped SDK; §3's raw-`sendGlobalEvent` example is now superseded by
+the helper but kept for the underlying-mechanism explanation.
 
 ---
 
@@ -75,24 +77,29 @@ depend on"* — "build platforms, not features" at ecosystem scale.
 
 ## 5. Decision & sequencing
 
-**Decided now:**
-- The instrumentation model above (auto for built-in, cooperative-emit for custom).
-- Keep `OMWA_Emit` as the **internal seam**; do **not** publish a public SDK yet
-  (one consumer = us; premature generalization).
-- The next event should exercise the **auto path**: a skill event via
-  `SkillProgression` (`SkillCheckFailed` / skill-use) — a real sanctioned hook,
-  zero other-mod cooperation, answers a genuine question. (Candidate for `03`.)
+**Decided + shipped (2026-07-18):** once CCFF became a real third-party consumer
+(`ConfrontationAttempted`, `03`), the deferred SDK was extracted *from* that working
+integration rather than designed ahead of it. Delivered:
+1. **`OMWA_Track`** is the single public wire event; the old internal `OMWA_Emit` is
+   **retired** — first-party events (`AreaEntered`) go through the same path, so
+   there is one ingress and one trust policy, nothing unvalidated.
+2. **`scripts/omwanalytics/track.lua`** — a `require`-able helper exposing
+   `track(type, data)` that wraps the `sendGlobalEvent`. It stays an *event* (not an
+   openmw `interface`) because interfaces don't cross the local↔global script-context
+   boundary that instrumentation→collector must. Third parties **guard the require**
+   (`pcall(require, …)`) so an absent analytics mod is a no-op, not a load error.
+3. **Trust boundary at the emitter:** `telemetry.lua` re-validates every `OMWA_Track`
+   event (type is a non-empty string; `data` is a JSON-encodable table; caps:
+   ≤32 keys, ≤2048 serialized bytes) and **drops + logs** violations without
+   consuming `seq`. The helper runs in the caller's untrusted context, so its
+   client-side check is DX only — enforcement lives here, where identity/`seq`
+   already centralize.
+4. `03_EVENT_REGISTRY.md` is now the **public tracking plan / contract**, not a
+   private nicety.
 
-**Deferred until a real third-party consumer exists:** promote the seam to a public
-contract —
-1. Rename/alias `OMWA_Emit` → a stable public event (e.g. `OMWA_Track`) + ship a
-   `require`-able helper `scripts/omwanalytics/track.lua` exposing `track(type, data)`.
-2. `03_EVENT_REGISTRY.md` becomes a **public tracking plan** (governance = API
-   contract, not a nicety).
-3. **Trust boundary:** third-party payloads are semi-untrusted → validate at the
-   emitter (type is string; cap `data` size / key count; drop garbage). Ties to the
-   data-quality concerns in the learning profile. The emitter already centralizes
-   identity/`seq`, so that stays clean.
+**Still open (auto path):** a `SkillProgression`-based skill event (`SkillCheckFailed`
+/ skill-use) to exercise **passive/auto** instrumentation with a real engine hook —
+zero other-mod cooperation. Everything shipped so far is the *manual* path.
 
 ---
 

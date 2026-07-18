@@ -61,13 +61,54 @@ emit('SpikeStarted', { note = 'ingestion spike online' })
 -- Heartbeat so we can watch a live stream arrive in the shipper.
 time.runRepeatedly(function() emit('Heartbeat', {}) end, 5 * time.second)
 
--- Receive events forwarded from local/player scripts (e.g. AreaEntered from
--- scripts/omwanalytics/player.lua) and emit them on the single global seq stream.
--- Detection lives player-side; identity + ordering live here.
+-- --- public ingress: OMWA_Track -------------------------------------------
+-- The single validated entry point for every event forwarded from a local/player
+-- script -- our own (AreaEntered) AND any third party's (via the require-able
+-- scripts/omwanalytics/track.lua helper). Detection lives caller-side; identity +
+-- the one monotonic seq stream live here.
+--
+-- This is the TRUST BOUNDARY. The track.lua helper runs in the caller's untrusted
+-- context, so we re-validate here and cannot rely on it: type must be a non-empty
+-- string, data must be a JSON-encodable table within key/size caps. Anything that
+-- fails is DROPPED (seq is not consumed) with a one-line warning -- a runaway or
+-- malicious mod cannot bloat the stream or desync the seq counter.
+local MAX_DATA_KEYS  = 32
+local MAX_DATA_BYTES = 2048   -- serialized json.encode(data) byte cap
+
+local function countKeys(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+
+-- Returns ok:boolean, reason:string|nil. reason is set only when ok == false.
+local function validateTrack(e)
+    if type(e) ~= 'table' then return false, 'event is not a table' end
+    if type(e.type) ~= 'string' or e.type == '' then return false, 'type must be a non-empty string' end
+    local data = e.data
+    if data == nil then return true end                       -- empty data is fine
+    if type(data) ~= 'table' then return false, 'data must be a table' end
+    if countKeys(data) > MAX_DATA_KEYS then
+        return false, 'data exceeds ' .. MAX_DATA_KEYS .. ' keys'
+    end
+    local ok, encoded = pcall(json.encode, data)
+    if not ok then return false, 'data is not JSON-encodable' end
+    if #encoded > MAX_DATA_BYTES then
+        return false, 'data exceeds ' .. MAX_DATA_BYTES .. ' bytes'
+    end
+    return true
+end
+
 return {
     eventHandlers = {
-        OMWA_Emit = function(e)
-            if type(e) ~= 'table' or type(e.type) ~= 'string' then return end
+        OMWA_Track = function(e)
+            local ok, reason = validateTrack(e)
+            if not ok then
+                -- Not an OMWA1 event line -- a plain operator warning, ignored by the shipper.
+                print('[OMWAnalytics] dropped invalid OMWA_Track event: ' .. tostring(reason)
+                    .. ' (type=' .. tostring(type(e) == 'table' and e.type or e) .. ')')
+                return
+            end
             emit(e.type, e.data or {})
         end,
     },
