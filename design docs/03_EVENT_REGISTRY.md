@@ -83,3 +83,55 @@ OMWA1 {"v":1,"type":"AreaEntered","seq":7,"install_id":"e2a9…","session_id":"c
   deferred to the dashboard layer; the id is stable and query-safe as stored.
 - Possible later companion: `AreaExited` / dwell-time, if a "time spent per area"
   metric needs explicit exit events rather than deriving from the next `AreaEntered`.
+
+---
+
+## `ConfrontationAttempted`
+
+**First third-party event (defined + verified live 2026-07-17).** Emitted by a *separate* mod —
+`TheContrivedCaseOfFlordiusFastus` (CCFF) — not by our own scripts. This is the
+`08 §4` "another mod's pure-internal custom logic" case made real: CCFF's
+confrontation is a **bespoke deduction contest** (not an engine skill roll), so it
+is opaque to passive capture and must **emit to us** over the `OMWA_Emit` seam. It
+is the forcing function for a future public SDK (still deferred — see `08 §5`).
+
+**Question it answers:** *Where do players get stuck in confrontations?* — pass rate
+per suspect/topic, which failure modes dominate, how many attempts precede a break.
+
+**Grain — one event per *committed* attempt (decided 2026-07-17):** fires exactly
+when the player commits a check — a **fact jab** (`presentFactCard`) or a
+**pattern** case (`makeCase`) — capturing *both* pass and fail. It does **not** fire
+on mid-attempt UI (claim selection, adding/removing a board piece, opening the
+ledger). Failed attempts are the point: they carry the difficulty/funnel signal.
+
+**Trigger / detection:** CCFF's `scripts/ccff/confront_panel.lua` (a PLAYER script)
+calls `core.sendGlobalEvent('OMWA_Emit', { type = 'ConfrontationAttempted', data =
+… })`. The global event crosses the mod boundary through OpenMW's shared global-event
+namespace and lands in our `telemetry.lua`, which assigns the identity + `seq`
+envelope. If OMWA is not installed the event is simply unhandled (fire-and-forget).
+
+**`data` shape:**
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `suspect` | string | suspect id (e.g. `titania`) |
+| `topic` | string | topic id within that suspect (e.g. `name_at_scene`, `crime_scene`) |
+| `kind` | string | `fact` (single self-evident card) or `pattern` (claim + evidence set) |
+| `passed` | bool | did the committed attempt land |
+| `reason` | string | **fail only** (omitted on pass): `wrong_evidence`, `wrong_claim`, `missing_requirement`, `irrelevant_evidence`, `missing_required_tag`, `insufficient_support` |
+
+**Wire example:**
+```
+OMWA1 {"v":1,"type":"ConfrontationAttempted","seq":12,"install_id":"e2a9…","session_id":"c443…","ts":1784260000000,"data":{"suspect":"titania","topic":"crime_scene","kind":"pattern","passed":false,"reason":"missing_required_tag"}}
+```
+
+**Notes / evolution:**
+- `passed` is a bool so pass-rate is `avg(passed::int)`; `reason` is CCFF's own
+  vocabulary (it owns this event's `data`), safe to extend additively.
+- No API/DB change: generic transport stores a new `type` with zero DDL, `data` in
+  JSONB. Proven by `AreaEntered`.
+- This event's existence — a *foreign* mod writing tracking calls into its own
+  source — is the trigger to revisit the deferred public SDK in `08 §5` (rename
+  `OMWA_Emit` → a stable `OMWA_Track`, ship a `track.lua` helper, add emitter-side
+  payload validation for the semi-trusted caller). Deliberately **not** done yet:
+  extract the SDK *from* this working integration, don't design it ahead of one.

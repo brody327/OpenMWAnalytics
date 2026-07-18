@@ -3,6 +3,52 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-17 — First third-party event: CCFF → `ConfrontationAttempted` (manual instrumentation)
+
+Instrumented a *separate* mod (CCFF's `confront_panel.lua`) to emit telemetry into
+OMWA, and verified the row landing in Postgres live. First time an event was authored
+by a mod *other than ours* — the doc-08 "mod → platform" graduation, made concrete.
+The CCFF check is a **bespoke evidence-deduction contest, not an engine skill roll**
+→ opaque to passive capture → must emit manually over the `OMWA_Emit` seam. One
+guarded helper + 8 call sites (2 fact-jab, 6 pattern); zero API/DB change.
+
+**Concepts covered:**
+- **Auto vs manual instrumentation, and why the sandbox forces the choice** — OpenMW
+  isolates every script, so a foreign mod's *custom* logic can't be observed from
+  outside; it has to call *us*. Built-in mechanics (skills, combat) would go the
+  passive/engine-hook route instead.
+- **Emit-on-fail is not cardinality bloat when failure IS the question** — grain
+  discipline kills *low-information* events, not *high-information* ones. Failed
+  attempts are the difficulty/funnel signal; pass-only telemetry is blind to
+  drop-off. "Volume" and "signal" are different axes.
+- **Extract the SDK from a working integration, don't design it ahead of one** —
+  deferring `track.lua` until a real consumer exists (YAGNI) means the eventual
+  public contract generalizes from *observed* needs, not guesses. Minimal raw emit
+  first; promote to contract second.
+- **Validate at the trust boundary you own** — a semi-trusted third party can't be
+  relied on to self-limit its payloads. Validation belongs at *our* emitter (the
+  seam where every foreign event converges and identity/`seq` already live), not in
+  the untrusted caller, and not (as the authoritative boundary) downstream in the
+  shipper/DB. Defense-in-depth downstream is fine; ownership of the contract is not.
+- **Fire-and-forget cross-mod coupling** — the emit is a guarded `pcall` inserted
+  *alongside* CCFF's logic, never replacing a branch; if OMWA isn't installed the
+  global event is simply unhandled. A telemetry call must never be able to break its host.
+
+**Ops gotcha (verify):** the pipeline was silently DOWN — only `drizzle-kit studio`
+was running; API + shipper were both dead, so the game logged into a void. Lesson:
+"I see the log line" proves the *emitter*, not the *pipeline*. The shipper's
+start-at-EOF design also means a fresh attempt is needed after (re)starting it — old
+log lines aren't replayed.
+
+**Checkpoint quiz: 3/3** — grain (fails carry the signal), SDK timing (extract from
+a real caller), trust boundary (validate at our seam). All chosen over plausible
+traps. No weak spots.
+
+**Next:** the SDK extraction (doc 08 §5) — promote `OMWA_Emit` → stable `OMWA_Track`,
+ship `scripts/omwanalytics/track.lua` (`track(type, data)`), registry-as-public-contract,
+emitter-side payload validation; then refactor CCFF's 8 call sites through the helper
+as the first real SDK consumer. Possibly pair with `packages/contract` (step 3).
+
 ## 2026-07-16 — Scalability restructure: git + monorepo workspace (steps 1–2)
 
 Put the project under git + GitHub (`github.com/brody327/OpenMWAnalytics`) and
