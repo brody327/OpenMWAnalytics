@@ -3,6 +3,73 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-18 (cont.) — Shipper reliability: at-least-once delivery (`04`)
+
+Fixed the shipper gap that dropped session `ce7bd7c4` (and a worse latent bug).
+Rewrote `ship.mjs`; wrote `04_SHIPPER_DESIGN.md`. Verified with a deterministic
+mock-API + synthetic-log harness (all D1/D2/D3 checks pass) — logic proven without
+touching Postgres.
+
+**Concepts covered:**
+- **Delivery semantics** — at-most-once vs at-least-once vs exactly-once. The old
+  shipper advanced its offset *before* the POST → accidental at-most-once → silent
+  loss when the API was down. Fix = **post-then-checkpoint** (advance only on 2xx).
+- **At-least-once + idempotent sink = effectively-once** — retry is only safe because
+  the API upserts on `(session_id, seq)`. *Idempotency upstream is what licenses retry
+  downstream.* Re-sends are harmless no-ops; no exactly-once machinery needed.
+- **Retry falls out of not-advancing** — leaving the offset put on failure *is* the
+  retry; the poll loop re-reads next tick. No separate retry queue.
+- **Durable checkpoint** — offset persisted to a sidecar via temp-file + atomic
+  rename (a crash never leaves a half-written checkpoint); resume beats start-at-EOF.
+- **File-identity, not size, detects rotation** — `openmw.log` is recreated each
+  launch; `size < offset` misses a relaunch that grew past the old offset (the live
+  bug). Fingerprint the first line (per-launch banner) → robust new-file detection.
+- **The log is the durable buffer** — if the API is down, events wait in `openmw.log`;
+  no separate on-disk spool / backpressure needed at this scale.
+
+**No quiz this turn.** Candidate revisit later: contrast this pull/at-least-once model
+with a push/ack model (e.g. why a broker would change the guarantees).
+
+## 2026-07-18 — SDK extraction: public `OMWA_Track` ingress + `track.lua` (+ shipper gap surfaced)
+
+Promoted the proven `OMWA_Emit` seam into a public SDK, *extracted from* the working
+CCFF integration. Shipped: `track.lua` (require-able `track(type, data)` helper),
+`telemetry.lua` single **validated** `OMWA_Track` ingress (retired `OMWA_Emit`),
+`player.lua` dogfooded onto it, CCFF refactored to the guarded helper. Verified live:
+`AreaEntered` (first-party) and `ConfrontationAttempted` (third-party) both land.
+
+**Concepts covered:**
+- **Event vs interface for a cross-context API** — OpenMW `interface`s are shared only
+  *within* one script context (global↔global / player↔player). Instrumentation lives
+  in local/player scripts; the collector is global. So the public transport *must* be
+  a global event; the `require`-able helper is ergonomics wrapping that event, not the
+  contract itself.
+- **A `require`-based SDK reintroduces a load-time hard dependency** — the raw event
+  degraded gracefully for free (unhandled = nothing). `require()` of an absent module
+  *raises*, so a third party must **guard the require** (`pcall`) or an uninstalled
+  analytics mod breaks *their* script load. Ergonomics and coupling trade off.
+- **Single validated ingress + validate at the boundary you own** — one path
+  (`OMWA_Track`) for first- and third-party alike; `telemetry.lua` re-validates
+  (shape + ≤32 keys / ≤2048 bytes, drop-and-log, `seq` not consumed). The helper runs
+  in the caller's untrusted context, so its checks are DX only.
+- **Dogfooding** — routing our own `AreaEntered` through the public helper means we
+  exercise the same path we ask third parties to use.
+
+**Verify gotcha (the real lesson):** the live test's events reached `openmw.log` but
+**not Postgres** — the *shipper* missed the whole session. A game **restart truncates
+`openmw.log`**, and the shipper's non-durable byte offset + coarse `size < offset`
+truncation heuristic dropped it. Recovered manually with a one-off `replay.mjs`
+(54/54 inserted), which *proved the SDK output is DB-valid* and isolated the fault to
+delivery state, not the SDK. **"I saw the log line" proves the emitter, never the
+pipeline.** This is the `04_SHIPPER_DESIGN.md` reliability gap, now hit live → promoted
+to the next task.
+
+**Checkpoint quiz (prior turn): 3/3.** No new quiz this turn.
+
+**Next:** shipper reliability (`04`) — durable offset across restarts (persist offset +
+a file fingerprint), replay-on-truncation, retry/backoff. Turn `replay.mjs` into
+automatic recovery.
+
 ## 2026-07-17 — First third-party event: CCFF → `ConfrontationAttempted` (manual instrumentation)
 
 Instrumented a *separate* mod (CCFF's `confront_panel.lua`) to emit telemetry into

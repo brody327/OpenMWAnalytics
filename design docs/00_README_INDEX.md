@@ -12,7 +12,7 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `01_ARCHITECTURE_OVERVIEW.md` | The end-to-end pipeline, components, and what has been validated. | ✅ ingestion validated |
 | `02_EVENT_ENVELOPE.md` | The event envelope contract: universal metadata vs. event-specific payload, time model, versioning, delivery/ordering guarantees. **The foundational contract.** | 🟡 in design |
 | `03_EVENT_REGISTRY.md` | Catalog of canonical event `type`s and their `data` shapes (the "tracking plan"). | 🟢 first real event (`AreaEntered`) defined + verified live |
-| `04_SHIPPER_DESIGN.md` | The Node log-tailing shipper: offset tracking, truncation handling, batching, retries, at-least-once. | 🟢 shipper built + loop verified live; doc not written |
+| `04_SHIPPER_DESIGN.md` | The Node log-tailing shipper: offset tracking, truncation handling, batching, retries, at-least-once. | ✅ reliability pass done 2026-07-18 (durable offset, relaunch detection, at-least-once); doc written |
 | `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested |
 | `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented |
 | `07_DASHBOARD.md` | React/Next dashboard: the question-answering views. | ⬜ not started |

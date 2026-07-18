@@ -21,6 +21,9 @@ build/
 *.log
 *.pid
 
+# Shipper durable-offset checkpoint (per-machine runtime state, not source).
+shipper/.ship-state.json
+
 # --- Editor / OS cruft ------------------------------------------------------
 .DS_Store
 Thumbs.db
