@@ -16,6 +16,8 @@ build/
 .env.local
 .env.*.local
 !.env.example
+aws.txt
+omwa-key.pem
 
 # --- Logs / runtime scratch -------------------------------------------------
 *.log
