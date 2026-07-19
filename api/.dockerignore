@@ -1,0 +1,9 @@
+# Keep the build context small and secrets out of the image.
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+Dockerfile
+.dockerignore
