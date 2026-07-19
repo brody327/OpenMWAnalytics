@@ -1,0 +1,64 @@
+# Deployment for the OpenMW Analytics ingest/query API.
+#
+# A Deployment declares DESIRED state ("run N copies of this image, keep them healthy")
+# and the k8s control loop reconciles reality to match. It also owns rollouts: when the
+# image changes, it spins up new pods and tears down old ones.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omwa-api
+  labels:
+    app: omwa-api
+spec:
+  # Single replica: one t3.micro node with ~1 GB RAM. More replicas wouldn't add
+  # availability on a single node (they'd die together) and would just compete for RAM.
+  # Horizontal scaling is a multi-node concern, out of scope for this deploy.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: omwa-api
+  template:
+    metadata:
+      labels:
+        app: omwa-api
+    spec:
+      containers:
+        - name: api
+          # :latest is convenient but NOT reproducible — you can't tell which commit is
+          # running, and rollbacks are impossible. The production-correct form pins the
+          # image digest/sha (the CI also pushes :<sha> tags). Acceptable here; noted.
+          image: ghcr.io/brody327/omwanalytics-api:latest
+          imagePullPolicy: Always # re-pull on every pod start since the tag is mutable
+          ports:
+            - containerPort: 4000
+          env:
+            - name: DATABASE_SSL
+              value: "true" # RDS requires TLS; see api/src/db/client.ts
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: omwa-api-secrets
+                  key: DATABASE_URL
+          # Resource governance. requests = what the scheduler reserves; limits = the hard
+          # ceiling. Keeping these small leaves headroom for the k3s control plane on 1 GB.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          # Liveness: if /health stops answering, k8s restarts the container (deadlock recovery).
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          # Readiness: until /health answers, the pod is kept OUT of the Service's rotation,
+          # so traffic never hits a pod that's still booting or has lost its DB pool.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10

@@ -1,0 +1,20 @@
+# Service for the OpenMW Analytics API.
+#
+# Pods are ephemeral — their IPs change on every restart/reschedule. A Service gives the
+# Deployment's pods a single STABLE virtual IP and in-cluster DNS name (omwa-api), and
+# load-balances across whichever pods currently match its selector. The Ingress (step 9)
+# will route external traffic to this Service, never to a pod directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: omwa-api
+  labels:
+    app: omwa-api
+spec:
+  type: ClusterIP # internal-only; the Ingress is what faces the internet
+  selector:
+    app: omwa-api # matches the pod label from the Deployment template
+  ports:
+    - name: http
+      port: 80 # the port the Service is reached on inside the cluster
+      targetPort: 4000 # the container port to forward to
