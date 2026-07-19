@@ -49,5 +49,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # (Layer caching via type=gha was removed: GitHub retired the v1 Actions
+          # Cache backend in early 2025 and the exporter failed the job. Saves only
+          # ~30-60s for this small image. A registry-based cache is a future option.)
