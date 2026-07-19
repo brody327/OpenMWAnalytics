@@ -1,0 +1,53 @@
+name: build-api
+
+# CI for the ingest/query API: on every push to main that touches api/, build the
+# Docker image and push it to GHCR (GitHub Container Registry). The k3s cluster later
+# pulls the published image by tag — this is the "build" half of CI/CD; deploying to
+# the cluster is a separate step.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'api/**'
+      - '.github/workflows/build-api.yml'
+  workflow_dispatch: {}   # allow manual runs from the Actions tab
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/omwanalytics-api
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # lets the auto GITHUB_TOKEN push to GHCR — no PAT needed
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive tags/labels: a stable :latest plus an immutable :<git-sha> so every
+      # deploy is traceable to a commit.
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
