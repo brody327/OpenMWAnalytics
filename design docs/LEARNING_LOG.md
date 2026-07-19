@@ -3,6 +3,49 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-19 — Deploy: API live on k3s + RDS (`09`)
+
+Took the platform from "runs on my laptop" to "running in AWS." End state: containerized
+API on single-node **k3s** (EC2), pulling from **GHCR** via **GitHub Actions**, connected to
+managed **RDS Postgres** over TLS — verified by a DB-backed query served from the pod. Public
+URL (Ingress) is the remaining piece.
+
+**Concepts covered (cloud/Linux is the user's growth area — taught step-by-step):**
+- **Security groups grant by identity, not address** — RDS 5432 allowed *from the EC2's
+  security group*, not an IP; stable across reboots, least-privilege, never `0.0.0.0/0`. SG
+  rules are also stateful (return traffic implied).
+- **The VPC boundary** — the pod reaches RDS over the private network (inside the VPC); the
+  laptop is an outsider, which is why the one-off schema migration needed *temporary* RDS
+  public access + a laptop-IP rule, then reverted.
+- **Container registry = npm for images** — image≈package, GHCR≈npmjs, push≈publish,
+  pull≈install, tag≈version. Push auth via the auto per-run `GITHUB_TOKEN` (no stored PAT);
+  pull is anonymous → **package must be Public** (separate from repo visibility) or k3s
+  `401`s → `ImagePullBackOff`.
+- **`:latest` vs `:<sha>`** — sha is immutable/traceable/rollback-able; latest is a moving
+  pointer. CI stamps both.
+- **k8s object model** — Deployment (desired state + rollouts + self-healing), Service
+  (stable address in front of ephemeral pods), Secret (credential out of image *and* git;
+  base64 not encrypted by default). Readiness gates *traffic*; liveness triggers *restart*.
+- **RDS TLS** — pg needs `ssl`; used `rejectUnauthorized:false` (encrypted, cert not
+  verified) gated on `DATABASE_SSL` so local dev stays plaintext.
+- **Capacity is a first-class constraint** — 1 GB `t3.micro` can't hold k3s (~600–750 MB
+  idle) + any workload; presented as thrash → API-server timeouts → `kubectl` "hangs."
+  Fixed with swap (headroom) then **right-sizing to `t3.small`** via in-place instance-type
+  change (disk/k3s/swap persist). Chose x86 `t3.small` over cheaper arm64 `t4g.small`
+  because images are architecture-specific.
+- **CI failure triage** — build broke on the retired `type=gha` cache backend (a
+  build-speed optimization), not the app; removed it. Distinguished `ImagePullBackOff`
+  (fetch) from `CrashLoopBackOff` (app died after start).
+
+**Quiz:** 8/8 across two rounds (SG-by-identity, VPC boundary, ImagePullBackOff cause,
+tag tradeoff, readiness-vs-liveness, Secret boundary, TLS tradeoff, CI token). A third
+whole-process quiz follows. **Feedback captured:** randomize the correct-answer position in
+quizzes (don't always place it first).
+
+**Cost note:** `t3.small` not free 24/7 → instance stopped between sessions. **Next:**
+Ingress + TLS + public URL (needs an Elastic IP for a stable address), then wire the
+dashboard (Vercel) + local shipper at it.
+
 ## 2026-07-18 (cont.) — Dashboard: query API + Next.js consumer (`07`)
 
 Built the read side: `GET /stats/confrontations` (Express, aggregation SQL) + a
