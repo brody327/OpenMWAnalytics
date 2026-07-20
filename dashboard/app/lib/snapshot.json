@@ -1,5 +1,18 @@
 {
-  "capturedAt": null,
-  "byTopic": [],
-  "byReason": []
+  "capturedAt": "2026-07-20T03:38:11.299Z",
+  "byTopic": [
+    {
+      "suspect": "titania",
+      "topic": "name_at_scene",
+      "attempts": 3,
+      "passes": 0,
+      "pass_rate": 0
+    }
+  ],
+  "byReason": [
+    {
+      "reason": "wrong_evidence",
+      "count": 3
+    }
+  ]
 }
