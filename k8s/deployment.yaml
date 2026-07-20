@@ -39,6 +39,14 @@ spec:
                 secretKeyRef:
                   name: omwa-api-secrets
                   key: DATABASE_URL
+            # Shared bearer token for POST /events. The API FAILS CLOSED — without this the
+            # write path returns 503 — so a missing key here breaks ingestion loudly rather
+            # than silently leaving the endpoint world-writable.
+            - name: OMWA_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: omwa-api-secrets
+                  key: OMWA_INGEST_TOKEN
           # Resource governance. requests = what the scheduler reserves; limits = the hard
           # ceiling. Keeping these small leaves headroom for the k3s control plane on 1 GB.
           resources:

@@ -23,6 +23,9 @@ import { fileURLToPath } from 'node:url';
 
 const LOG = process.argv[2] ?? 'C:\\Documents\\My Games\\OpenMW\\openmw.log';
 const API = process.env.OMWA_API ?? 'http://localhost:4000/events';
+// Shared bearer token for the authenticated ingest path. Kept in the environment, never
+// in the repo. Unset is legal for a local API that is also unconfigured.
+const TOKEN = process.env.OMWA_INGEST_TOKEN ?? '';
 const STATE = fileURLToPath(new URL('./.ship-state.json', import.meta.url));
 const SENTINEL = 'OMWA1 ';
 const POLL_MS = 1000;
@@ -82,13 +85,30 @@ async function post(batch) {
   try {
     const res = await fetch(API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        // Ingest auth (design docs 05 / 09 §6). Omitted entirely when unset so a local
+        // dev API that is also unconfigured behaves the same as it always did.
+        ...(TOKEN && { Authorization: `Bearer ${TOKEN}` }),
+      },
       body: JSON.stringify(batch),
     });
     const body = await res.json().catch(() => ({}));
     if (res.ok) {
       console.log(`[shipper] sent ${batch.length} ->`, body);
       return true;
+    }
+    // 401/503 are CONFIGURATION faults, not transient ones. Retrying forever would spin
+    // silently against a wall, so name the cause loudly -- the offset still stays put, so
+    // nothing is lost once the token is fixed.
+    if (res.status === 401) {
+      console.error(
+        '[shipper] 401 UNAUTHORIZED — set OMWA_INGEST_TOKEN to match the API. Not a transient error; events are held, not lost.',
+      );
+    } else if (res.status === 503) {
+      console.error(
+        '[shipper] 503 — the API has no OMWA_INGEST_TOKEN configured, so its write path is closed.',
+      );
     }
     console.error(`[shipper] API ${res.status} (will retry):`, body);
     return false;

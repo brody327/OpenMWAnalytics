@@ -5,6 +5,7 @@ import express, {
   type NextFunction,
 } from 'express';
 import { ingest } from './events/ingest.js';
+import { requireIngestToken } from './events/auth.js';
 import { confrontations } from './stats/confrontations.js';
 import { friction } from './stats/friction.js';
 import { skills } from './stats/skills.js';
@@ -17,8 +18,9 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// Ingestion.
-app.post('/events', ingest);
+// Ingestion. Authenticated: this is the only WRITE path, and deployment put it on the
+// public internet. The read side below stays deliberately open (see events/auth.ts).
+app.post('/events', requireIngestToken, ingest);
 
 // Query / read side (aggregations for the dashboard).
 app.get('/stats/confrontations', confrontations);

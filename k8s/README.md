@@ -20,10 +20,28 @@ rather than as a checked-in YAML file. Run this on the EC2 (fill in the real pas
 
 ```bash
 kubectl create secret generic omwa-api-secrets \
-  --from-literal=DATABASE_URL='postgresql://omwa:<PASSWORD>@omwa-db.crs8e8i0k5q4.us-east-2.rds.amazonaws.com:5432/omwanalytics'
+  --from-literal=DATABASE_URL='postgresql://omwa:<PASSWORD>@omwa-db.crs8e8i0k5q4.us-east-2.rds.amazonaws.com:5432/omwanalytics' \
+  --from-literal=OMWA_INGEST_TOKEN='<TOKEN>'
 ```
 
-The Deployment references it via `secretKeyRef` and sets `DATABASE_SSL=true` (RDS requires TLS).
+The Deployment references both via `secretKeyRef` and sets `DATABASE_SSL=true` (RDS requires TLS).
+
+**`OMWA_INGEST_TOKEN`** authenticates `POST /events` — the only write path. Generate one with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+The same value goes to the shipper as `OMWA_INGEST_TOKEN`. ⚠️ **The API fails closed:** if the
+key is absent the write path returns 503 and logs loudly, rather than silently accepting
+unauthenticated writes — a missing config breaks ingestion noisily instead of removing the
+control. To add the key to an existing secret:
+
+```bash
+kubectl patch secret omwa-api-secrets \
+  -p "{\"stringData\":{\"OMWA_INGEST_TOKEN\":\"<TOKEN>\"}}"
+kubectl rollout restart deployment/omwa-api    # pods read secrets at start
+```
 
 ## Apply
 
