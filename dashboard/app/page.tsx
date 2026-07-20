@@ -3,23 +3,26 @@
 // client chart components. First view: "where do players get stuck in
 // confrontations?" (design docs 07).
 
-import { getConfrontationStats, type ConfrontationStats } from './lib/stats';
+import { getConfrontationStats } from './lib/stats';
 import { PassRateChart, FailureReasonChart } from './components/ConfrontationCharts';
 
 const titleCase = (s: string) =>
   s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-export default async function Home() {
-  let stats: ConfrontationStats | null = null;
-  let error: string | null = null;
-  try {
-    stats = await getConfrontationStats();
-  } catch (e) {
-    error = (e as Error).message;
-  }
+const whenCaptured = (iso: string | null) =>
+  iso
+    ? new Date(iso).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    : 'an earlier session';
 
-  const byTopic = stats?.byTopic ?? [];
+export default async function Home() {
+  const { stats, source, capturedAt, error } = await getConfrontationStats();
+
+  const byTopic = stats.byTopic;
   const totalAttempts = byTopic.reduce((n, t) => n + t.attempts, 0);
   const totalPasses = byTopic.reduce((n, t) => n + t.passes, 0);
   const overallRate = totalAttempts ? totalPasses / totalAttempts : 0;
@@ -37,13 +40,16 @@ export default async function Home() {
         </p>
       </header>
 
-      {error ? (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-          Couldn&apos;t reach the analytics API ({error}). Is it running on{' '}
-          <code>:4000</code>?
+      {source === 'snapshot' && (
+        <div className="mb-8 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+          <strong className="font-semibold">Showing a saved snapshot.</strong> The live
+          analytics API is unreachable, so these figures are from{' '}
+          {whenCaptured(capturedAt)} rather than right now.
+          <span className="mt-1 block text-xs opacity-70">{error}</span>
         </div>
-      ) : (
-        <>
+      )}
+
+      <>
           <section className="mb-10 grid grid-cols-3 gap-4">
             <StatTile label="Attempts" value={totalAttempts.toLocaleString()} />
             <StatTile label="Overall pass-rate" value={pct(overallRate)} />
@@ -55,7 +61,7 @@ export default async function Home() {
           </Card>
 
           <Card title="Why players miss" subtitle="Failure reasons across all failed attempts">
-            <FailureReasonChart data={stats?.byReason ?? []} />
+            <FailureReasonChart data={stats.byReason} />
           </Card>
 
           <Card title="Table view">
@@ -92,8 +98,7 @@ export default async function Home() {
               </table>
             </div>
           </Card>
-        </>
-      )}
+      </>
     </main>
   );
 }
