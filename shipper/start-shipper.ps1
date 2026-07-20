@@ -25,6 +25,9 @@
 .PARAMETER LogPath
     Path to openmw.log. Defaults to the shipper's own default.
 
+.PARAMETER Quiet
+    Suppress the banner. Used by the scheduled task, where nothing reads stdout.
+
 .EXAMPLE
     .\start-shipper.ps1
     Ship to the cloud using the token from shipper/.env.
@@ -37,7 +40,8 @@
 param(
     [switch]$Local,
     [string]$Token,
-    [string]$LogPath
+    [string]$LogPath,
+    [switch]$Quiet
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,17 +85,23 @@ if (-not $Local -and -not $Token) {
 
 # --- announce the destination LOUDLY ----------------------------------------
 # Shipping to the wrong place is this tool's most likely and least visible failure.
-$colour = if ($Local) { 'Yellow' } else { 'Cyan' }
 $label = if ($Local) { 'LOCAL' } else { 'CLOUD' }
-Write-Host ''
-Write-Host "  shipping to $label -> $target" -ForegroundColor $colour
-if ($Token) {
-    # Show only enough to tell two tokens apart. Never print the whole thing.
-    $hint = if ($Token.Length -gt 8) { $Token.Substring(0, 4) + '...' + $Token.Substring($Token.Length - 4) } else { '(short)' }
-    Write-Host "  token       $hint" -ForegroundColor DarkGray
+if ($Quiet) {
+    # Unattended (scheduled task): one timestamped line so the log shows restarts.
+    Write-Output "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] start-shipper -> $label $target"
 }
-Write-Host '  Ctrl+C to stop. Leave this running while you play.' -ForegroundColor DarkGray
-Write-Host ''
+else {
+    $colour = if ($Local) { 'Yellow' } else { 'Cyan' }
+    Write-Host ''
+    Write-Host "  shipping to $label -> $target" -ForegroundColor $colour
+    if ($Token) {
+        # Show only enough to tell two tokens apart. Never print the whole thing.
+        $hint = if ($Token.Length -gt 8) { $Token.Substring(0, 4) + '...' + $Token.Substring($Token.Length - 4) } else { '(short)' }
+        Write-Host "  token       $hint" -ForegroundColor DarkGray
+    }
+    Write-Host '  Ctrl+C to stop. Leave this running while you play.' -ForegroundColor DarkGray
+    Write-Host ''
+}
 
 # --- run --------------------------------------------------------------------
 $env:OMWA_API = $target
