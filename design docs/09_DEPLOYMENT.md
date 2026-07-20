@@ -202,7 +202,34 @@ now auto-deploys the dashboard, while the same push builds and publishes the API
 one trigger, two independent delivery paths. Verified: HTTP 200, stat tiles rendered, no
 error banner ⇒ the full chain `browser → Vercel SSR → api.omwanalytics.com → pod → RDS` works.
 
-Two things that fell out of it, both worth keeping:
+**The public URL is `https://omwanalytics.com`** — the apex serves the dashboard (Vercel-issued
+certificate), `www` redirects, and `api.` continues to point at the Elastic IP. Wiring it kept
+**Cloudflare authoritative** and added two CNAMEs (`@` and `www` → a Vercel-unique
+`*.vercel-dns-017.com` host, DNS-only). Vercel's *default* suggestion — delegating nameservers to
+`ns1/ns2.vercel-dns.com` — was **declined on purpose**: it would strip Cloudflare's authority and
+take the `api` A record with it, breaking the API and its HTTP-01 renewal, all to host one record.
+Note the apex CNAME is illegal DNS (the apex must hold SOA/NS, which a CNAME cannot coexist with);
+it works only because Cloudflare **flattens** it and answers with A records.
+
+**Degrading gracefully when the API is down.** The API lives on one EC2 box that gets stopped
+between sessions, so "upstream unreachable" is a *normal* state, and an error page is a poor
+answer for a URL on a résumé. The dashboard now falls back to a committed last-known-good
+snapshot with a plainly-worded notice and the capture date. Two details carry the design:
+
+- **The fetch is bounded** (`AbortSignal.timeout`). A *stopped* box drops packets rather than
+  refusing them, so an unbounded fetch **hangs** instead of failing — the timeout is what turns
+  an indefinite wait into a handleable error. Verified against an unroutable address: HTTP 200
+  in 4.08s with the fallback rendered.
+- **The snapshot is captured from the live API** (`npm run snapshot`), never hand-written, and
+  the script **refuses to overwrite a good snapshot with an empty response** — an API that is up
+  but empty would otherwise silently erase the fallback precisely when it is needed later.
+
+Rejected here: Next's `use cache` / ISR stale-while-revalidate. It reads like the right tool, but
+a **cold cache after a deploy** has nothing stale to serve, and the default cache is in-memory on
+serverless — implicit machinery whose failure mode is "sometimes works." An explicit committed
+snapshot always works, including on the first request after a deploy.
+
+Two things that fell out of the Vercel build, both worth keeping:
 
 - **`next dev` doesn't gate on type errors; `next build` does.** The first Vercel build failed
   on a Recharts `LabelList` formatter typed to accept `RenderableText`
