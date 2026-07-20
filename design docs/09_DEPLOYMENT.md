@@ -194,8 +194,32 @@ Secret populated). Verified from the public internet with full chain verificatio
 events yet). Cert `CN=api.omwanalytics.com`, issuer Let's Encrypt, TLSv1.3, expires
 2026-10-18, auto-renewing ~30 days prior.
 
-**Remaining:** repoint the dashboard (Vercel `OMWA_API_BASE`) and the local shipper
-(`OMWA_API`) at the public URL → play/seed to populate real data → (optional) automate the
-`kubectl apply` in CI to close the CD loop. Also open: pin the RDS CA bundle instead of
-`rejectUnauthorized:false`, and an HTTP→HTTPS redirect middleware on the Ingress.
+**Done + verified (2026-07-20) — the dashboard is live too:**
+**`https://open-mw-analytics-dashboard.vercel.app`**, deployed from the `dashboard/`
+workspace via Vercel's Git integration (Root Directory `dashboard`; `OMWA_API_BASE` set on
+Production + Preview only, so local dev keeps its `localhost:4000` fallback). Push to `main`
+now auto-deploys the dashboard, while the same push builds and publishes the API image —
+one trigger, two independent delivery paths. Verified: HTTP 200, stat tiles rendered, no
+error banner ⇒ the full chain `browser → Vercel SSR → api.omwanalytics.com → pod → RDS` works.
+
+Two things that fell out of it, both worth keeping:
+
+- **`next dev` doesn't gate on type errors; `next build` does.** The first Vercel build failed
+  on a Recharts `LabelList` formatter typed to accept `RenderableText`
+  (`string | number | null | undefined`) where ours took `number`. The fix is to *narrow*, and
+  to leave the parameter **un-annotated** so contextual typing supplies the exact union —
+  hand-restating a library's union is how you get it wrong. Run the production build locally
+  before pushing.
+- **The route summary is the proof of rendering mode.** `ƒ /` (dynamic) rather than `○`
+  (static) is what confirms `cache: 'no-store'` is keeping the dashboard live rather than
+  serving a snapshot baked at build time.
+
+**Remaining:** repoint the local shipper (`OMWA_API=https://api.omwanalytics.com/events` — note
+this var carries the *path*, unlike `OMWA_API_BASE`) and play to populate real data; the local
+API on `:4000` is no longer part of the loop. Then: **authentication on `POST /events`**, which
+became a genuine gap the moment ingestion went public (anyone can inject fabricated telemetry —
+candidates are a shared ingest key or per-install tokens); a decision on **uptime policy**, since
+the dashboard is only as up as the EC2 box we stop between sessions; and optionally automating
+`kubectl apply` in CI to close the CD loop, an HTTP→HTTPS redirect middleware, and pinning the
+RDS CA bundle instead of `rejectUnauthorized:false`.
 Step-level detail lives in the `project-deployment-plan` memory.
