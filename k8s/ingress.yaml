@@ -1,0 +1,47 @@
+# Public entry point for the OpenMW Analytics API.
+#
+# An Ingress is an L7 (HTTP-aware) routing rule, not a proxy itself. The Ingress CONTROLLER
+# — Traefik, built into k3s — watches these objects and reconfigures itself to match. That
+# indirection is why one node with one public IP can host many services: Traefik terminates
+# TLS once on :443 and dispatches by Host header and path.
+#
+# Why not just expose the Service directly?
+#   - NodePort would give a random high port (:31234) and no TLS.
+#   - LoadBalancer on k3s (Klipper) binds the host port, so ONE Service would own :443.
+#   - Ingress shares :80/:443 across every service and centralizes TLS. Adding the
+#     dashboard later is one more `rules:` entry here, not new infrastructure.
+#
+# Traffic path:
+#   client → Elastic IP :443 → Traefik (TLS terminated here, cert from the Secret below)
+#          → Service omwa-api:80 → Pod :4000
+# TLS ends at Traefik; the in-cluster hop is plaintext over the node's loopback network.
+# (The RDS hop is separately encrypted — see DATABASE_SSL in deployment.yaml.)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: omwa-api
+  labels:
+    app: omwa-api
+  annotations:
+    # Tells cert-manager to watch this Ingress, obtain a cert for every host in `tls.hosts`,
+    # and write it into `tls.secretName`. Swap to letsencrypt-staging while debugging.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - api.omwanalytics.com
+      # cert-manager CREATES this Secret; do not create it by hand. Its existence (and the
+      # cert inside) is the signal that the ACME flow completed.
+      secretName: omwa-api-tls
+  rules:
+    - host: api.omwanalytics.com # host-based routing: only requests for this name match
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: omwa-api
+                port:
+                  number: 80 # the Service port, not the container's 4000

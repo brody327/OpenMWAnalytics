@@ -1,0 +1,59 @@
+# Let's Encrypt certificate issuers (cert-manager).
+#
+# A ClusterIssuer is a cluster-wide "where do certificates come from" definition. Once it
+# exists, any Ingress annotated with `cert-manager.io/cluster-issuer: <name>` gets a real
+# TLS certificate minted, stored in a Secret, and RENEWED automatically (~30 days before
+# expiry). Let's Encrypt certs last only 90 days by design — short lifetimes limit the
+# damage of a leaked key and force automation, which is the whole point of ACME.
+#
+# How the HTTP-01 challenge proves we own the name:
+#   1. cert-manager asks Let's Encrypt for a cert for api.omwanalytics.com.
+#   2. LE returns a random token and expects it served at
+#      http://api.omwanalytics.com/.well-known/acme-challenge/<token>
+#   3. cert-manager spins up a temporary solver Pod + Service + Ingress for exactly that
+#      path, routed by Traefik.
+#   4. LE fetches the URL from the public internet. Serving it proves we control the DNS
+#      name AND the machine it points at — so the cert is issued.
+#   5. The solver objects are torn down; the signed cert lands in the Secret named by the
+#      Ingress's `tls.secretName`.
+#
+# Requirement: port 80 must be open to 0.0.0.0/0 (not just your IP) and the A record must
+# already point at the Elastic IP. HTTP-01 is inbound-fetch-based, so LE's servers — not
+# yours — have to reach it. (DNS-01 is the alternative when you can't open :80 or need a
+# wildcard cert; it proves ownership via a TXT record instead and needs registrar API creds.)
+---
+# STAGING — untrusted test CA. Browsers will show a warning for certs from this issuer.
+# Use it when iterating on the Ingress/DNS wiring: staging has vastly looser rate limits,
+# so a misconfiguration costs nothing. Production Let's Encrypt allows only ~5 FAILED
+# validations per hostname per hour — easy to burn through while debugging, and then you
+# are locked out of issuing for an hour.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: brody327@users.noreply.github.com # ACME account contact; used only for expiry/problem notices
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key # ACME ACCOUNT key (not the cert key); cert-manager creates it
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik # k3s ships Traefik as the built-in ingress controller
+---
+# PRODUCTION — real, publicly trusted certificates. This is what the Ingress points at.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: brody327@users.noreply.github.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

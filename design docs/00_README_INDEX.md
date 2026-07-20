@@ -17,7 +17,7 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented |
 | `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes. | 🟢 first view live: `/stats/confrontations` + Next.js pass-rate dashboard |
 | `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ✅ SDK built (`OMWA_Track` + `track.lua`); auto path still open |
-| `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; the local/cloud deploy boundary. | 🟡 in progress (VM+k3s+RDS+CI up; manifests/URL remain) |
+| `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live at `https://api.omwanalytics.com`**; dashboard/shipper repoint remains |
 | `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |
 
 ## Source-of-truth rules

@@ -1,9 +1,10 @@
 # 09 — Deployment & Hosting
 
-**Status:** 🟡 in progress (2026-07-19). **API is live on the cluster and talking to RDS.**
-CI/CD (Actions→GHCR), the k3s Deployment/Service, RDS networking + TLS, and the schema
-migration are all done and verified end-to-end (a DB-backed query served from the pod).
-The **public URL (Ingress + TLS)** and wiring the dashboard/shipper are the remaining work.
+**Status:** 🟢 **the API is publicly live at `https://api.omwanalytics.com`** (2026-07-20).
+CI/CD (Actions→GHCR), the k3s Deployment/Service, RDS networking + TLS, the schema
+migration, and the public Ingress with an auto-renewing Let's Encrypt certificate are all
+done and verified from the open internet. Wiring the dashboard/shipper to the public URL
+(and populating real data) is the remaining work.
 Live step-by-step state and the exact resume point are tracked in agent memory
 (`project-deployment-plan`); this doc records the *design*.
 
@@ -83,7 +84,44 @@ CI and a from-scratch box (container images are architecture-specific).
 
 ---
 
-## 4. Notable decisions & gotchas (design-relevant)
+## 4. The public entry point — DNS, Ingress, TLS
+
+Getting from "a pod that works" to "a URL someone can use" is four independent layers, and
+naming them separately is most of the clarity:
+
+| Layer | Choice | Why |
+| --- | --- | --- |
+| **Stable address** | **Elastic IP** `16.58.59.201` | EC2's default public IP is a lease from a shared pool, reclaimed on every stop. An EIP is allocated to the account and remapped at will, so a DNS record survives stop/start. |
+| **Name** | **`omwanalytics.com`** (Cloudflare Registrar), `A api → EIP`, **DNS-only** | A real domain over `sslip.io`: certs are issued to *names*, the URL outlives the IP, and it reads as a product rather than a demo. |
+| **Routing** | **Traefik Ingress** (built into k3s) | An Ingress is a routing *rule*; the controller reconfigures itself to match. One node + one IP serves many services, dispatching by Host header. |
+| **Certificate** | **cert-manager v1.21 + Let's Encrypt** (HTTP-01) | Real trusted cert, auto-renewed. |
+
+**Why Ingress and not the simpler exposures:** `NodePort` yields a random high port and no
+TLS; `LoadBalancer` on k3s (Klipper) binds the host port, so *one* Service would own :443.
+Ingress shares :80/:443 across every service and centralizes TLS — adding the dashboard
+later is one more `rules:` entry, not new infrastructure.
+
+**How HTTP-01 proves domain control.** cert-manager requests a cert; Let's Encrypt returns a
+token and expects it served at `http://<host>/.well-known/acme-challenge/<token>`;
+cert-manager spins up a temporary solver Pod/Service/Ingress for exactly that path; **LE
+fetches that URL from the public internet.** Serving it proves control of both the DNS name
+and the machine it resolves to. The solver is torn down and the signed cert lands in the
+Secret named by the Ingress's `tls.secretName`. Certs last 90 days by design — short
+lifetimes cap the damage of a leaked key and force the automation.
+
+Traffic path, with the two independent TLS segments:
+
+```
+client ──TLS(LE cert)──▶ Elastic IP :443 ──▶ Traefik  [TLS terminates here]
+                                              │ plaintext, in-cluster
+                                              ▼
+                                    Service omwa-api:80 ──▶ Pod :4000
+                                              │ ──TLS(RDS)──▶ RDS (private VPC)
+```
+
+---
+
+## 5. Notable decisions & gotchas (design-relevant)
 
 - **Networking by identity, not IP:** the RDS firewall (security group) allows Postgres
   (5432) *from the EC2's security group*, not from an IP range — access granted by
@@ -111,10 +149,33 @@ CI and a from-scratch box (container images are architecture-specific).
   `DATABASE_URL` are injected at runtime by k8s — one image runs in any environment.
 - **Capacity is a first-class constraint:** a starved node presents as "slow datastore +
   handler timeouts," fixed with swap/right-sizing — not a k8s reinstall.
+- **`port-forward` validated a path production doesn't use.** The pod was verified last
+  session with `kubectl port-forward deploy/omwa-api`, which connects *straight to the pod* —
+  so the fact that the `Service` had never actually been created went unnoticed until the
+  Ingress needed it. **Lesson (a rhyme with the shipper's "I saw the log line"): test through
+  the layer production uses, or you prove a different system than the one you ship.**
+- **A valid cert plus a 404 localizes the fault precisely.** Traefik selects the certificate
+  by SNI from the Ingress's `tls:` block, then *separately* resolves the rule's backend.
+  Getting a chain-verified LE cert while receiving Traefik's `404 page not found` proved the
+  Ingress was loaded and the backend was not — two independent facts from one request.
+  (Express's 404 reads `Cannot GET /path`; distinguishing *whose* 404 you got is the tell.)
+- **HTTP-01 needs :80 open to `0.0.0.0/0`, not to My-IP.** Validation is an *inbound* fetch
+  by Let's Encrypt's servers, so an IP-scoped rule looks fine from your laptop and fails the
+  challenge. DNS-01 is the alternative when :80 can't be opened (or for wildcards).
+- **Cloudflare's orange-cloud proxy must stay OFF** (grey cloud / "DNS only"): proxying
+  answers DNS with Cloudflare's anycast IPs and terminates TLS itself, which hides the origin
+  and breaks HTTP-01. **Verify DNS by resolving the name, not by reading the dashboard** — if
+  the answer is your own IP, it isn't proxied.
+- **ACME contact email in a public repo:** the ClusterIssuers use a GitHub `noreply` address
+  rather than a personal one — LE only sends expiry notices, and committed email is harvested.
+- **Public IPv4 now bills.** An *unattached* Elastic IP has always cost ~$0.005/hr; since
+  Feb 2024 AWS charges that for *all* public IPv4 including in-use (~$3.60/mo), with a
+  free-tier allowance for the first 12 months. Don't release the EIP when stopping the
+  instance — releasing it breaks the DNS binding for a few cents.
 
 ---
 
-## 5. Progress & remaining work
+## 6. Progress & remaining work
 
 **Done + verified (2026-07-19):** RDS security-group rule (5432 from the EC2 SG) →
 `api/Dockerfile` + Actions build/push to GHCR (dropped the retired `type=gha` build cache)
@@ -122,8 +183,19 @@ CI and a from-scratch box (container images are architecture-specific).
 liveness+readiness probes → schema migrated to RDS → pod **1/1 Running**, a DB-backed query
 served from the pod through the private VPC path with TLS.
 
-**Remaining:** Traefik Ingress + TLS + a stable public URL (needs an **Elastic IP** since the
-public IP changes on stop/start) → repoint the dashboard (Vercel `OMWA_API_BASE`) and the
-local shipper (`OMWA_API`) at it → seed/play to populate data → (optional) automate the
-`kubectl apply` in CI to close the CD loop. Step-level detail lives in the
-`project-deployment-plan` memory.
+**Done + verified (2026-07-20) — the cloud half is complete:** Elastic IP allocated and
+associated → `omwanalytics.com` registered (Cloudflare Registrar) with `A api → EIP`,
+DNS-only → cert-manager v1.21.0 installed → `ClusterIssuer` ×2 (LE staging + prod) →
+`Ingress` for `api.omwanalytics.com` → certificate **issued on the first attempt**
+(`Certificate → CertificateRequest → Order → Challenge`, solver torn down, `omwa-api-tls`
+Secret populated). Verified from the public internet with full chain verification:
+`https://api.omwanalytics.com/health` → `{"ok":true}` and
+`/stats/confrontations` → `{"byTopic":[],"byReason":[]}` (empty only because RDS holds no
+events yet). Cert `CN=api.omwanalytics.com`, issuer Let's Encrypt, TLSv1.3, expires
+2026-10-18, auto-renewing ~30 days prior.
+
+**Remaining:** repoint the dashboard (Vercel `OMWA_API_BASE`) and the local shipper
+(`OMWA_API`) at the public URL → play/seed to populate real data → (optional) automate the
+`kubectl apply` in CI to close the CD loop. Also open: pin the RDS CA bundle instead of
+`rejectUnauthorized:false`, and an HTTP→HTTPS redirect middleware on the Ingress.
+Step-level detail lives in the `project-deployment-plan` memory.

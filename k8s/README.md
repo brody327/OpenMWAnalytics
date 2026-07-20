@@ -9,6 +9,8 @@ on the EC2 box, wired to the managed RDS Postgres.
 |------|------|------|
 | `deployment.yaml` | Deployment | Runs 1 replica of the GHCR image, injects env, probes `/health` |
 | `service.yaml` | Service (ClusterIP) | Stable in-cluster address in front of the pod; Ingress target |
+| `cluster-issuer.yaml` | ClusterIssuer ×2 | Let's Encrypt (staging + prod) ACME issuers for cert-manager |
+| `ingress.yaml` | Ingress | Public HTTPS route `api.omwanalytics.com` → the Service, TLS via cert-manager |
 | — | Secret | Holds `DATABASE_URL`; created imperatively, **never committed** |
 
 ## The Secret (do NOT put this in git)
@@ -39,8 +41,42 @@ If the pod is stuck in `ImagePullBackOff`, the GHCR package is likely still priv
 make it public (GitHub → Packages → omwanalytics-api → settings → visibility), or add an
 imagePullSecret.
 
+## Public URL: cert-manager + Ingress
+
+Install cert-manager once per cluster (CRDs + 3 pods: controller, webhook, cainjector):
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.0/cert-manager.yaml
+kubectl -n cert-manager rollout status deploy/cert-manager-webhook   # wait: it must be Ready
+```
+
+Then apply the issuers and the route:
+
+```bash
+kubectl apply -f cluster-issuer.yaml
+kubectl apply -f ingress.yaml
+```
+
+Watch the ACME flow. A `Certificate` spawns a `CertificateRequest` → `Order` → `Challenge`;
+each disappears as it completes, and the `omwa-api-tls` Secret appearing means success:
+
+```bash
+kubectl get certificate,certificaterequest,order,challenge
+kubectl describe certificate omwa-api-tls     # events tell you exactly where it stalled
+kubectl get secret omwa-api-tls               # exists ⇒ issued
+curl -v https://api.omwanalytics.com/health
+```
+
+Issuance normally takes 30–90s. If `Challenge` sits in `pending`, the cause is almost always
+reachability, not k8s: check the A record resolves to the Elastic IP (`nslookup`) and that
+port **80** is open to `0.0.0.0/0` in the EC2 security group — Let's Encrypt fetches the
+challenge URL from the public internet, so a My-IP-only rule fails.
+
 ## Prerequisites
 
 - CI green and the GHCR package **public** (so k3s pulls anonymously).
 - The `events` table already migrated into RDS (`drizzle-kit push`).
 - RDS security group allows 5432 inbound from the EC2's security group.
+- EC2 security group allows **80 and 443 from `0.0.0.0/0`** (80 is required for HTTP-01).
+- An **Elastic IP** associated with the instance, and an `A` record for
+  `api.omwanalytics.com` pointing at it (DNS-only, not proxied).
