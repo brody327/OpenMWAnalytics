@@ -1,7 +1,9 @@
 # 07 — Dashboard (the query side)
 
-**Status:** 🟢 first view live (2026-07-18): `/stats/confrontations` query endpoint +
-a Next.js pass-rate dashboard (`dashboard/`), verified rendering against live data.
+**Status:** 🟢 **deployed and public at [omwanalytics.com](https://omwanalytics.com)**
+(2026-07-20), rendering real gameplay data. First view (2026-07-18):
+`/stats/confrontations` query endpoint + a Next.js pass-rate dashboard (`dashboard/`).
+Hosting/DNS/TLS detail lives in `09_DEPLOYMENT.md`; this doc owns the read-side design.
 
 The dashboard is the **read half** of the platform — where the event log becomes
 answers. `01`'s thesis is "actionable insight, not raw counts" (*"Puzzle 7 has a 71%
@@ -66,10 +68,45 @@ through the `dataviz` skill for a consistent, accessible palette.)
 
 ---
 
-## 4. Deferred (YAGNI)
+## 4. Serving it when the API is down
+
+The API runs on a single EC2 box that is **stopped between sessions to control cost**, so
+"upstream unreachable" is a *routine* state here, not an exception — and for a public URL,
+an error page is the wrong answer to a routine state.
+
+`getConfrontationStats()` therefore returns a `StatsResult`
+(`{ stats, source, capturedAt, error }`) rather than throwing, and the page renders a
+committed **last-known-good snapshot** with a plainly-worded notice and the capture date.
+Three decisions make it honest rather than merely pretty:
+
+- **The fetch is bounded** (`AbortSignal.timeout(4000)`). A *stopped* box drops packets
+  instead of refusing connections, so an unbounded fetch **hangs** rather than failing —
+  the timeout is what converts an indefinite wait into a handleable error.
+- **The snapshot is captured *from* the live API** (`npm run snapshot`), never hand-written,
+  so the fallback is data that was genuinely true at a known moment. The script refuses to
+  overwrite a good snapshot with an empty response — an API that is up but empty would
+  otherwise erase the fallback exactly when it will later be needed.
+- **Stale data is always labelled.** A visitor is never allowed to mistake a snapshot for
+  a live reading.
+
+**Rejected: Next's `use cache` / ISR stale-while-revalidate.** It appears to solve this,
+but a **cold cache after a deploy** has nothing stale to serve, and the default cache is
+in-memory on serverless — implicit machinery whose failure mode is "sometimes works." An
+explicit committed snapshot works on the first request after every deploy.
+
+The route stays **dynamic** (`ƒ` in the build summary, via `cache: 'no-store'`) so a live
+API is always queried per request; the snapshot is strictly a fallback, never a cache.
+
+---
+
+## 5. Deferred (YAGNI)
 
 - **Time filters / ranges** on the endpoints — add when there's enough history to slice.
 - **Materialized views / rollups** — a live `GROUP BY` is fine at dev volume; reach for a
   matview only when a query gets slow or fans out over millions of rows.
 - **AreaEntered / liveness views** — additional `/stats/*` endpoints, same pattern.
-- **Auth** — internal tool, single operator; not needed yet.
+- **Auth on the read endpoints** — `/stats/*` is deliberately public: it's aggregate,
+  anonymous, and being readable is the point of a portfolio dashboard. ⚠️ **Note this is no
+  longer true of the *write* path:** deployment moved `POST /events` from "unreachable on
+  localhost" to "world-writable on the internet," so anyone can inject fabricated telemetry.
+  That is a real open gap — see `09_DEPLOYMENT.md` §6.

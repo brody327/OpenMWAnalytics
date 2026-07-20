@@ -89,7 +89,47 @@ original live failure (game relaunch dropping a session) is exactly the D3 case.
 
 ---
 
-## 5. Deferred (YAGNI until a forcing function)
+## 5. Operating it (and the first-run trap, observed live 2026-07-20)
+
+Run it against local dev, or against the deployed API:
+
+```bash
+OMWA_API='https://api.omwanalytics.com/events' node ship.mjs
+```
+
+**The failure:** a full play session's events reached `openmw.log` but never reached
+Postgres. The shipper simply **was not running** while the game was.
+
+**How that was diagnosed, and why the tell is worth remembering:** the checkpoint file
+`shipper/.ship-state.json` did not exist. The shipper writes it even for a chunk containing
+**zero** events (it advances past startup noise so it need not rescan). So the file's absence
+proves the loop never completed a single poll — a stronger and faster signal than reading
+logs. *An artifact written on every iteration is a liveness probe for free.*
+
+**Why it couldn't simply be restarted:** §3.4's first-run rule means that with no checkpoint
+the shipper starts at **EOF** — so starting it after the fact would have silently skipped the
+events already in the log. The trade-off documented as "acceptable: that history predates the
+observer" is exactly right in principle and exactly the trap in practice, because the *first*
+run is when a user is most likely to play first and ship second.
+
+**Recovery** — seed a checkpoint at the top of the file and let the normal loop do the work:
+
+```bash
+printf '{"offset":0,"fingerprint":null}' > shipper/.ship-state.json
+```
+
+The whole log is then reshipped. This is safe **because of D1**: the API upserts on
+`(session_id, seq)`, so replay is idempotent. Observed: `received: 8, inserted: 8,
+duplicates: 0`. At-least-once delivery into an idempotent sink turns what would otherwise be
+a data-loss incident into a one-line fix — the reliability model paying for itself.
+
+**After the first run the trap is gone.** Start-at-EOF applies only when no checkpoint exists;
+once one does, starting the shipper *after* a session resumes from the checkpoint and catches
+up. Ordering is only fragile exactly once.
+
+---
+
+## 6. Deferred (YAGNI until a forcing function)
 
 - **Explicit backoff** — on a long API outage the loop retries every 1s. Harmless at dev
   scale; add exponential backoff if it ever matters.

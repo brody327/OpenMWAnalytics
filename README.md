@@ -10,15 +10,30 @@ Instead the mod emits structured, versioned log lines, and an external shipper
 tails the log and forwards them — a *pull* ingestion pipeline built around that
 hard platform constraint.
 
+## Live
+
+| | |
+| --- | --- |
+| **Dashboard** | **[omwanalytics.com](https://omwanalytics.com)** — Next.js on Vercel |
+| **API** | [api.omwanalytics.com](https://api.omwanalytics.com/health) — Express on k3s (AWS EC2), Postgres on RDS |
+
+Real gameplay events, shipped from a real OpenMW install. The dashboard falls back
+to a labelled last-known-good snapshot when the API is offline (the cluster is
+stopped between sessions to control cost).
+
 ## Architecture
 
 ```
 OpenMW Lua mod ──print()──▶ openmw.log ──tail──▶ Node shipper ──POST──▶ API ──▶ Postgres ──▶ Dashboard
-   (mod/)                   (game dir)          (shipper/)            (api/)                 (planned)
-└─────────── ships to players (frozen once installed) ──────────┘ └──── services you operate ────┘
+   (mod/)                   (game dir)          (shipper/)            (api/)     (RDS)      (dashboard/)
+└─────────── runs on the player's machine ──────────────────────┘ └──────── deployed to the cloud ───────┘
                                                     ▲
                           the OMWA1 wire envelope is the contract between the two worlds
 ```
+
+The mod and shipper can never be hosted — they run where the game runs. That HTTP
+seam *is* the deploy boundary, which is why the API and dashboard were env-configured
+from the start: deployment turned out to be pure configuration, not a rewrite.
 
 Every telemetry line is `OMWA1 <json>` — a versioned envelope (anonymous
 `install_id` + `session_id`, monotonic `seq`, event-time `ts`, event `type`, and a
@@ -36,7 +51,9 @@ invisible to the game.
 | --- | --- | --- |
 | `mod/` | The OpenMW mod: Lua emitter + `.omwscripts`. **Distributed to players.** | Player's machine (Lua sandbox) |
 | `shipper/` | Node log-tailer that ships `OMWA1` lines to the API. Companion tool. | Player's machine |
-| `api/` | Express + Zod ingest API; Drizzle + Postgres. **Operated service.** | Your server |
+| `api/` | Express + Zod ingest & query API; Drizzle + Postgres. **Operated service.** | Cloud (k3s on EC2) |
+| `dashboard/` | Next.js App Router read surface; server components consume `/stats/*`. | Cloud (Vercel) |
+| `k8s/` | Deployment, Service, Ingress, cert-manager issuers for the k3s cluster. | — |
 | `packages/` | Shared wire contract (envelope schemas + types). *(planned)* | — |
 | `design docs/` | The design bible (numbered, teaching-style). Start at `00_README_INDEX.md`. | — |
 
@@ -47,10 +64,16 @@ invisible to the game.
 - ✅ **Ingest API** — generic `POST /events`, envelope validation, epoch-ms → `timestamptz`
   at the boundary, idempotent upsert.
 - ✅ **Data model** — Postgres `events` table, `PRIMARY KEY (session_id, seq)`, `(type, ts)` index, JSONB payload.
-- ✅ **First real event** — `AreaEntered` ("where do players spend time?").
-- ⬜ **Dashboard** — the question-answering read surface. Not started.
+- ✅ **Real events** — `AreaEntered` (first-party) and `ConfrontationAttempted`, emitted by a
+  *separate* mod through the public `OMWA_Track` SDK — the cross-mod seam works.
+- ✅ **Shipper reliability** — at-least-once delivery: durable offset, post-then-checkpoint,
+  first-line fingerprinting to detect a relaunched (recreated) log.
+- ✅ **Dashboard** — pass-rate/failure-reason views over `GET /stats/*`, aggregated in SQL.
+- ✅ **Deployed** — Docker image built by GitHub Actions → GHCR, running on k3s behind a
+  Traefik ingress with auto-renewing Let's Encrypt TLS; Postgres on managed RDS.
+- ⬜ **Ingest auth** — `POST /events` is currently unauthenticated. Next up.
 
-## Quickstart (server side)
+## Quickstart (local development)
 
 ```bash
 # from repo root
@@ -59,6 +82,16 @@ npm run --workspace api db:up    # start Postgres in Docker
 npm run api                      # start the ingest API (http://localhost:4000)
 npm run ship                     # tail openmw.log and forward events
 ```
+
+To ship into the deployed stack instead of a local API, point the shipper at it:
+
+```bash
+OMWA_API='https://api.omwanalytics.com/events' npm run ship
+```
+
+The shipper keeps a durable checkpoint (`shipper/.ship-state.json`), so it resumes where
+it left off. On its **very first** run — with no checkpoint — it starts at end-of-file so a
+large pre-existing log isn't replayed.
 
 The mod loads automatically once its `data=`/`content=` entries are present in
 `openmw.cfg` (see `mod/omwanalytics.omwscripts`).

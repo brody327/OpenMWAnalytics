@@ -3,6 +3,63 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-20 — Public URL, dashboard deploy, and the loop closed in the cloud (`09`, `07`, `04`)
+
+Finished the deploy: **`https://omwanalytics.com`** (dashboard) over
+**`https://api.omwanalytics.com`** (API), both on auto-renewing TLS, serving real
+gameplay events end-to-end.
+
+**Concepts covered (cloud/DNS is the growth area — taught step-by-step):**
+- **Elastic IP** — EC2's default public IP is a *lease* reclaimed on stop; an EIP is
+  account-owned and remappable, so DNS survives stop/start. Unattached EIPs bill; since
+  Feb 2024 *all* public IPv4 bills (free-tier allowance for 12 months).
+- **The four layers of "a URL"** — stable address (EIP), name (DNS), routing (Ingress),
+  certificate (ACME). Naming them separately is most of the clarity.
+- **Ingress is a routing *rule*, not a proxy** — the controller (Traefik) reconfigures
+  itself to match. Why not NodePort (random port, no TLS) or k3s `LoadBalancer`/Klipper
+  (one Service owns :443). Ingress shares :80/:443 and centralizes TLS.
+- **ACME / HTTP-01** — LE issues a token, cert-manager serves it at
+  `/.well-known/acme-challenge/`, **LE fetches it inbound from the public internet**
+  (hence :80 open to `0.0.0.0/0`, not My-IP). 90-day certs force automation by design.
+  DNS-01 is the alternative when :80 can't open or a wildcard is needed.
+- **CNAME flattening** — a CNAME at the apex is illegal DNS (apex must hold SOA/NS);
+  Cloudflare resolves it server-side and answers with A records. Declined Vercel's
+  nameserver delegation: it would strip Cloudflare's authority and take the `api` A
+  record — and its cert renewal — with it.
+- **Verify DNS by resolving it, not by reading the dashboard** — the dashboard shows
+  intent; `nslookup` shows what the world sees. Also how to confirm "grey cloud": if the
+  answer is *your* IP, it isn't proxied.
+- **`next dev` doesn't gate on type errors; `next build` does** — and contextual typing
+  beats hand-restating a library's union (my own annotation was wrong twice: missed `null`).
+- **`ƒ` vs `○` in the build summary** is the proof of rendering mode (dynamic vs static).
+- **Bounded fetches** — a *stopped* host drops packets rather than refusing them, so an
+  unbounded fetch **hangs** instead of failing. `AbortSignal.timeout` converts an
+  indefinite wait into a handleable error.
+- **Threat models change on deploy** — `POST /events` went from "unreachable on localhost"
+  to world-writable. The security property was never in the code; it was in the topology.
+
+**Checkpoint quiz: 2 / 2.** ✅
+
+| Q | Topic | Result |
+| --- | --- | --- |
+| 1 | Why :80 must be world-open despite serving on :443 (LE fetches the challenge inbound over plain HTTP) | ✅ |
+| 2 | Valid cert + 404 ⇒ TLS/SNI matching and backend routing are separate steps | ✅ |
+
+**Two debugging lessons, both the same shape — *test through the layer production uses*:**
+1. The `omwa-api` **Service had never existed**. Last session's `kubectl port-forward
+   deploy/…` talks straight to the pod and skips the Service, so it validated a path
+   production doesn't use. Surfaced only when the Ingress needed it.
+2. A play session's events reached `openmw.log` but not Postgres — **the shipper wasn't
+   running**. The tell was the *absence* of `.ship-state.json`, which is written on every
+   poll even when a chunk has zero events: **an artifact written each iteration is a free
+   liveness probe.** Recovery was one seeded checkpoint, safe only because at-least-once
+   delivery meets an idempotent sink (`inserted: 8, duplicates: 0`) — the July reliability
+   work paying for itself.
+
+Rhymes with 2026-07-18's *"I saw the log line" proves the emitter, not the pipeline.*
+
+---
+
 ## 2026-07-19 — Deploy: API live on k3s + RDS (`09`)
 
 Took the platform from "runs on my laptop" to "running in AWS." End state: containerized
