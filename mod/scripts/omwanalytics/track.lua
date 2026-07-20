@@ -3,14 +3,20 @@
 --   local track = require('scripts.omwanalytics.track')
 --   track('ConfrontationAttempted', { suspect = id, passed = false })
 --
--- require() this from any LOCAL / PLAYER / MENU script and call track(type, data)
--- to report a gameplay event to the analytics platform. It wraps the OMWA_Track
--- global event so callers never hand-write the wire envelope or the event name.
+-- require() this from any GLOBAL / LOCAL / PLAYER / MENU script and call
+-- track(type, data) to report a gameplay event to the analytics platform. It wraps
+-- the OMWA_Track global event so callers never hand-write the wire envelope or the
+-- event name.
 --
 -- WHY an event (not an openmw interface): interfaces are shared only *within* one
 -- script context (global<->global, player<->player). Telemetry is collected by a
--- GLOBAL script, but instrumentation lives in local/player scripts, so crossing
--- that boundary requires sendGlobalEvent. This helper is that one line.
+-- GLOBAL script, but instrumentation usually lives in local/player scripts, so
+-- crossing that boundary requires sendGlobalEvent. This helper is that one line.
+--
+-- GLOBAL callers work too (CCFF's evidence_bridge.lua is one): core.sendGlobalEvent
+-- is available in global scripts -- it is restricted only in LOAD scripts, and in
+-- menu scripts while the game is not running (see openmw.menu#menu.getState). The
+-- global->global hop still lands in telemetry.lua's OMWA_Track handler unchanged.
 --
 -- TRUST: this code runs in the *caller's* context, which the platform does not
 -- trust. The client-side check below is a DX nicety only — the GLOBAL emitter

@@ -11,13 +11,14 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `00_README_INDEX.md` | This index + source-of-truth rules. | living |
 | `01_ARCHITECTURE_OVERVIEW.md` | The end-to-end pipeline, components, and what has been validated. | ✅ ingestion validated |
 | `02_EVENT_ENVELOPE.md` | The event envelope contract: universal metadata vs. event-specific payload, time model, versioning, delivery/ordering guarantees. **The foundational contract.** | ✅ locked |
-| `03_EVENT_REGISTRY.md` | Catalog of canonical event `type`s and their `data` shapes (the "tracking plan") — now the **public contract** third parties emit against. | 🟢 two events live (`AreaEntered`, third-party `ConfrontationAttempted`) |
+| `03_EVENT_REGISTRY.md` | Catalog of canonical event `type`s and their `data` shapes (the "tracking plan") — now the **public contract** third parties emit against. | 🟢 2 live (`AreaEntered`, `ConfrontationAttempted`); 3 exposure events designed 2026-07-20; `Spike*`/`Heartbeat` retired |
 | `04_SHIPPER_DESIGN.md` | The Node log-tailing shipper: offset tracking, truncation handling, batching, retries, at-least-once; operating it. | ✅ reliability pass done 2026-07-18 (durable offset, relaunch detection, at-least-once); §5 adds the first-run EOF trap + recovery |
 | `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested |
 | `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented |
 | `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes; offline degradation. | 🟢 **live at `omwanalytics.com`** with real data + snapshot fallback |
 | `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ✅ SDK built (`OMWA_Track` + `track.lua`); auto path still open |
 | `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**: API `api.omwanalytics.com` + dashboard on Vercel; shipper repoint remains |
+| `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20 |
 | `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |
 
 ## Source-of-truth rules
@@ -25,7 +26,8 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 1. Ingestion mechanics / sandbox constraints → `01_ARCHITECTURE_OVERVIEW.md`.
 2. The event contract (envelope shape, time, versioning, delivery) → `02_EVENT_ENVELOPE.md`.
 3. Specific event names and payload shapes → `03_EVENT_REGISTRY.md` (must stay
-   consistent with the envelope rules in `02`).
+   consistent with the envelope rules in `02`). **An event must cite a question in
+   `10_ANALYTICS_QUESTIONS.md`** — questions justify events, not the reverse.
 4. Record a decision where it belongs *first*, then reflect impacts elsewhere.
 5. Do not update a design doc until a decision is actually made.
 
@@ -62,6 +64,7 @@ The MVP vertical slice is closed **and hardened** end-to-end:
   and there is now a real managed database accumulating real rows to tune against.
 - **`SkillProgression` skill event** (`03` + `08`) — proves the **passive/auto**
   instrumentation path (engine hook, no mod cooperation); today's work is all manual.
-- `03` follow-ups — retire the `Spike*`/`Heartbeat` placeholders + reconcile
-  `telemetry.lua`'s stale "spike" header once real events cover liveness.
+- ✅ ~~`03` follow-ups — retire the `Spike*`/`Heartbeat` placeholders + reconcile
+  `telemetry.lua`'s stale "spike" header~~ **done 2026-07-20** (they corrupted
+  sequence analysis — see `03`).
 - Explicit backoff / batch caps in the shipper (`04 §5`) — deferred until needed.

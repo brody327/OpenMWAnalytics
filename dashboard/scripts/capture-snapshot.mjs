@@ -33,8 +33,37 @@ if (byTopic.length === 0 && byReason.length === 0) {
   process.exit(1);
 }
 
-const payload = { capturedAt: new Date().toISOString(), byTopic, byReason };
+// The friction (sequence) endpoint is captured too, but is NOT allowed to fail the
+// run: it was added later than /stats/confrontations, so a deployed API may not have
+// it yet. Missing here => the key is absent => the UI reports "unavailable" rather
+// than rendering empty arrays as though they were a real reading.
+async function optional(path) {
+  try {
+    const r = await fetch(`${API_BASE}${path}`, { signal: AbortSignal.timeout(15_000) });
+    if (r.ok) return await r.json();
+    console.warn(`[snapshot] ${path} responded ${r.status} — omitting it`);
+  } catch (e) {
+    console.warn(`[snapshot] ${path} unreachable (${e.message}) — omitting it`);
+  }
+  return undefined;
+}
+
+const friction = await optional('/stats/friction');
+const skills = await optional('/stats/skills');
+
+const payload = {
+  capturedAt: new Date().toISOString(),
+  byTopic,
+  byReason,
+  ...(friction && { friction }),
+  ...(skills && { skills }),
+};
 await writeFile(OUT, JSON.stringify(payload, null, 2) + '\n', 'utf8');
 console.log(
-  `[snapshot] captured ${byTopic.length} topic rows / ${byReason.length} reason rows from ${API_BASE}`,
+  `[snapshot] captured ${byTopic.length} topic rows / ${byReason.length} reason rows` +
+    (friction
+      ? ` / ${friction.afterFailure?.length ?? 0} after-failure + ${friction.attemptsToPass?.length ?? 0} attempts rows`
+      : ' / no friction data') +
+    (skills ? ` / ${skills.byCheck?.length ?? 0} skill-check rows` : ' / no skills data') +
+    ` from ${API_BASE}`,
 );

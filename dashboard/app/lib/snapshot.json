@@ -1,18 +1,256 @@
 {
-  "capturedAt": "2026-07-20T03:38:11.299Z",
+  "capturedAt": "2026-07-20T21:25:07.386Z",
   "byTopic": [
     {
       "suspect": "titania",
       "topic": "name_at_scene",
+      "attempts": 9,
+      "passes": 1,
+      "pass_rate": 0.111
+    },
+    {
+      "suspect": "titania",
+      "topic": "crime_scene",
       "attempts": 3,
-      "passes": 0,
-      "pass_rate": 0
+      "passes": 1,
+      "pass_rate": 0.333
     }
   ],
   "byReason": [
     {
       "reason": "wrong_evidence",
-      "count": 3
+      "count": 8
+    },
+    {
+      "reason": "wrong_claim",
+      "count": 2
     }
-  ]
+  ],
+  "friction": {
+    "afterFailure": [
+      {
+        "suspect": "titania",
+        "topic": "name_at_scene",
+        "next_action": "retried_same",
+        "count": 5,
+        "avg_gap_seconds": 2.8
+      },
+      {
+        "suspect": "titania",
+        "topic": "crime_scene",
+        "next_action": "retried_same",
+        "count": 2,
+        "avg_gap_seconds": 9
+      },
+      {
+        "suspect": "titania",
+        "topic": "name_at_scene",
+        "next_action": "session_end",
+        "count": 2,
+        "avg_gap_seconds": null
+      },
+      {
+        "suspect": "titania",
+        "topic": "name_at_scene",
+        "next_action": "abandoned",
+        "count": 1,
+        "avg_gap_seconds": 8
+      }
+    ],
+    "attemptsToPass": [
+      {
+        "suspect": "titania",
+        "topic": "name_at_scene",
+        "sessions": 4,
+        "solved_sessions": 1,
+        "total_attempts": 9,
+        "avg_attempts_to_pass": 3,
+        "max_attempts_in_a_session": 3
+      },
+      {
+        "suspect": "titania",
+        "topic": "crime_scene",
+        "sessions": 1,
+        "solved_sessions": 1,
+        "total_attempts": 3,
+        "avg_attempts_to_pass": 3,
+        "max_attempts_in_a_session": 3
+      }
+    ]
+  },
+  "skills": {
+    "byCheck": [
+      {
+        "check_id": "ccff_jeanus_inventory_lockbox_puzzle:guess",
+        "skill": "luck",
+        "stat_type": "attribute",
+        "attempts": 20,
+        "passes": 0,
+        "pass_rate": 0,
+        "fluke_passes": 0,
+        "avg_fail_margin": -70,
+        "closest_fail_margin": -70,
+        "worst_fail_margin": -70
+      },
+      {
+        "check_id": "ccff_attic_vent_in:enter",
+        "skill": "acrobatics",
+        "stat_type": "skill",
+        "attempts": 1,
+        "passes": 0,
+        "pass_rate": 0,
+        "fluke_passes": 0,
+        "avg_fail_margin": -25,
+        "closest_fail_margin": -25,
+        "worst_fail_margin": -25
+      },
+      {
+        "check_id": "ccff_attic_vent_in:open",
+        "skill": "security",
+        "stat_type": "skill",
+        "attempts": 1,
+        "passes": 1,
+        "pass_rate": 1,
+        "fluke_passes": 0,
+        "avg_fail_margin": null,
+        "closest_fail_margin": null,
+        "worst_fail_margin": null
+      },
+      {
+        "check_id": "ccff_empty_levitation_bottle_balcony:analyze",
+        "skill": "alchemy",
+        "stat_type": "skill",
+        "attempts": 1,
+        "passes": 1,
+        "pass_rate": 1,
+        "fluke_passes": 0,
+        "avg_fail_margin": null,
+        "closest_fail_margin": null,
+        "worst_fail_margin": null
+      },
+      {
+        "check_id": "ccff_flordius fastus:examine_face",
+        "skill": "alchemy",
+        "stat_type": "skill",
+        "attempts": 1,
+        "passes": 1,
+        "pass_rate": 1,
+        "fluke_passes": 0,
+        "avg_fail_margin": null,
+        "closest_fail_margin": null,
+        "worst_fail_margin": null
+      },
+      {
+        "check_id": "ccff_flordius_room_rope:examine",
+        "skill": "security",
+        "stat_type": "skill",
+        "attempts": 1,
+        "passes": 1,
+        "pass_rate": 1,
+        "fluke_passes": 0,
+        "avg_fail_margin": null,
+        "closest_fail_margin": null,
+        "worst_fail_margin": null
+      },
+      {
+        "check_id": "ccff_gathris_glove_scene:examine",
+        "skill": "security",
+        "stat_type": "skill",
+        "attempts": 1,
+        "passes": 1,
+        "pass_rate": 1,
+        "fluke_passes": 0,
+        "avg_fail_margin": null,
+        "closest_fail_margin": null,
+        "worst_fail_margin": null
+      },
+      {
+        "check_id": "ccff_j_mortar:analyze",
+        "skill": "alchemy",
+        "stat_type": "skill",
+        "attempts": 1,
+        "passes": 0,
+        "pass_rate": 0,
+        "fluke_passes": 0,
+        "avg_fail_margin": -25,
+        "closest_fail_margin": -25,
+        "worst_fail_margin": -25
+      },
+      {
+        "check_id": "ccff_j_mortar:smell",
+        "skill": "alchemy",
+        "stat_type": "skill",
+        "attempts": 1,
+        "passes": 1,
+        "pass_rate": 1,
+        "fluke_passes": 0,
+        "avg_fail_margin": null,
+        "closest_fail_margin": null,
+        "worst_fail_margin": null
+      }
+    ],
+    "failureDistance": [
+      {
+        "band": "build_gap",
+        "count": 3,
+        "avg_margin": -40
+      }
+    ],
+    "byStat": [
+      {
+        "skill": "luck",
+        "stat_type": "attribute",
+        "trigger": "inspect",
+        "checks": 20,
+        "distinct_checks": 1,
+        "pass_rate": 0
+      },
+      {
+        "skill": "alchemy",
+        "stat_type": "skill",
+        "trigger": "inspect",
+        "checks": 4,
+        "distinct_checks": 4,
+        "pass_rate": 0.75
+      },
+      {
+        "skill": "security",
+        "stat_type": "skill",
+        "trigger": "inspect",
+        "checks": 3,
+        "distinct_checks": 3,
+        "pass_rate": 1
+      },
+      {
+        "skill": "acrobatics",
+        "stat_type": "skill",
+        "trigger": "inspect",
+        "checks": 1,
+        "distinct_checks": 1,
+        "pass_rate": 0
+      },
+      {
+        "skill": "agility",
+        "stat_type": "attribute",
+        "trigger": "environment",
+        "checks": 1,
+        "distinct_checks": 1,
+        "pass_rate": 1
+      },
+      {
+        "skill": "alteration",
+        "stat_type": "skill",
+        "trigger": "environment",
+        "checks": 1,
+        "distinct_checks": 1,
+        "pass_rate": 0
+      }
+    ],
+    "byRoute": [
+      {
+        "route": "alchemy",
+        "passes": 1
+      }
+    ]
+  }
 }

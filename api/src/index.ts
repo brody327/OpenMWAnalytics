@@ -6,6 +6,8 @@ import express, {
 } from 'express';
 import { ingest } from './events/ingest.js';
 import { confrontations } from './stats/confrontations.js';
+import { friction } from './stats/friction.js';
+import { skills } from './stats/skills.js';
 
 const app = express();
 app.use(express.json());
@@ -20,6 +22,8 @@ app.post('/events', ingest);
 
 // Query / read side (aggregations for the dashboard).
 app.get('/stats/confrontations', confrontations);
+app.get('/stats/friction', friction);
+app.get('/stats/skills', skills);
 
 // Central error handler (Express 5 forwards async rejections here).
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

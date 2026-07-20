@@ -1,25 +1,24 @@
--- OpenMW Analytics — ingestion spike (GLOBAL script)
+-- OpenMW Analytics — telemetry emitter (GLOBAL script)
 --
--- Goal of this spike: prove the ingestion channel end to end.
---   1. A global script can mint a persistent, anonymous install id.
---   2. It can emit structured, sentinel-prefixed lines to openmw.log.
---   3. An external Node "shipper" can tail the log and parse them.
+-- The one place an event becomes a wire line. Responsibilities:
+--   1. mint + persist the anonymous install id; mint a per-launch session id;
+--   2. own the single monotonic `seq` stream shared by every event source;
+--   3. validate at the trust boundary (see OMWA_Track below);
+--   4. print sentinel-prefixed JSON to openmw.log for the shipper to tail.
 --
--- This is throwaway-quality on purpose. Once verified, the real event
--- model and emit API get designed properly.
+-- The Lua sandbox has no network and no filesystem write, so emitting to the log
+-- IS the egress mechanism (design docs 01 / 02).
 
-local core    = require('openmw.core')
 local storage = require('openmw.storage')
-local time    = require('openmw_aux.time')
 local json    = require('scripts.omwanalytics.json')
 
 local SENTINEL     = 'OMWA1'          -- version tag the shipper greps for
 local SECTION_NAME = 'OMWAnalytics'   -- persistent global storage section
 
 -- --- anonymous ids --------------------------------------------------------
--- Random v4-style UUID. math.random is seeded by the engine at startup;
--- we fold in getRealTime() for a little extra entropy. NOT cryptographic --
--- fine for an anonymous analytics id, never use for anything security-bearing.
+-- Random v4-style UUID, seeded by the engine's startup seeding of math.random.
+-- NOT cryptographic -- fine for an anonymous analytics id, never use for
+-- anything security-bearing.
 local function uuid4()
     local template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
     return (template:gsub('[xy]', function(c)
@@ -55,11 +54,13 @@ local function emit(eventType, data)
     }))
 end
 
--- Runs once each time the script context starts (new game, load, reloadlua).
-emit('SpikeStarted', { note = 'ingestion spike online' })
-
--- Heartbeat so we can watch a live stream arrive in the shipper.
-time.runRepeatedly(function() emit('Heartbeat', {}) end, 5 * time.second)
+-- NOTE: no events fire at context start. The `SpikeStarted` + 5s `Heartbeat`
+-- placeholders were REMOVED 2026-07-20: they answered no product question (design
+-- doc 10's rule) and actively corrupted sequence analysis -- a heartbeat every 5s
+-- meant the row following almost any real event was a heartbeat, so LEAD() over the
+-- stream reported idling instead of behaviour (07 §4). Platform liveness is /health's
+-- job, not the product event log's. If true session *duration* is ever needed, that
+-- is a deliberate coarse SessionPinged justified by a doc-10 question, not a 5s ping.
 
 -- --- public ingress: OMWA_Track -------------------------------------------
 -- The single validated entry point for every event forwarded from a local/player
