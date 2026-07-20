@@ -86,7 +86,17 @@ export function PassRateChart({ data }: { data: TopicStat[] }) {
         />
         <Tooltip cursor={{ fill: c.series, fillOpacity: 0.08 }} content={<TopicTooltip />} />
         <Bar dataKey="pass_rate" fill={c.series} radius={[0, 4, 4, 0]} barSize={22} isAnimationActive={false}>
-          <LabelList dataKey="pass_rate" position="right" formatter={pct} fill={c.ink} fontSize={12} />
+          {/* A data point may lack the key, so Recharts widens this formatter's arg to
+              RenderableText (string | number | null | undefined). Leave it un-annotated —
+              contextual typing supplies the exact type — and narrow instead of asserting,
+              so a missing value renders no label rather than "NaN%". */}
+          <LabelList
+            dataKey="pass_rate"
+            position="right"
+            formatter={(v) => (typeof v === 'number' ? pct(v) : '')}
+            fill={c.ink}
+            fontSize={12}
+          />
         </Bar>
       </BarChart>
     </ResponsiveContainer>
