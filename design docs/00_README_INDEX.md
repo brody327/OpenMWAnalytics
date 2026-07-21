@@ -56,14 +56,31 @@ The MVP vertical slice is closed **and hardened** end-to-end:
 - ✅ **Shipper reliability** (`04`): at-least-once delivery — durable offset,
   post-then-checkpoint, first-line-fingerprint relaunch detection. No longer flaky.
 
-### Next candidates
-- ▶ **Ingest authentication** (`05`, `09` §6) — deployment moved `POST /events` from
-  "unreachable on localhost" to **world-writable on the internet**; anyone can inject
-  fabricated telemetry. A gap the deployment itself opened.
-- ▶ **Postgres performance tuning** (`06`) — the largest *core* skill still untouched,
-  and there is now a real managed database accumulating real rows to tune against.
-- **`SkillProgression` skill event** (`03` + `08`) — proves the **passive/auto**
-  instrumentation path (engine hook, no mod cooperation); today's work is all manual.
+### Next candidates (end of 2026-07-20)
+
+**The platform is fully live and real-time**: game → log → shipper → cloud API → RDS →
+`omwanalytics.com` in ~1–3s, collection running automatically via a logon Scheduled Task,
+ingest authenticated. Remaining threads:
+
+- ✅ ~~**Ingest authentication**~~ **done 2026-07-20** (`05`): bearer token, fails closed,
+  verified from the public internet. Threat model recorded — a client-side secret raises
+  the bar, it does not guarantee anything.
+- ▶ **Postgres performance tuning** (`06`) — the largest *core* JD skill still untouched.
+  Blocked on **volume, not capability**: a `GROUP BY` over ~100 rows teaches nothing.
+  Needs real play volume or deliberately generated load.
+- ▶ **Exposure events + content manifest** (`10` Module 2) — the only module with
+  *nothing* answerable. Counting what was never discovered requires the mod to declare
+  what exists.
+- ▶ **Rate limiting** (`05`) — auth stops anonymous writes, not a valid-token client
+  flooding the endpoint. The honest next security gap.
+- **Filter `/stats/*` to `env = 'prod'`** (`06`) — deliberately *not* done: every row today
+  is the author's, so filtering would blank the dashboard. Do it when player data exists.
+- **Milestone / progression events** (`10` Module 4) — completion funnel (4.2), pacing (4.3).
+- **`SkillProgression` engine event** (`03` + `08`) — proves the **passive/auto**
+  instrumentation path (engine hook, no mod cooperation); all current work is manual.
+- **Search / ranking / pgvector** — the AI-engineering thread, unstarted. Needs data.
+- `bestAny` (a passive check where *every* stat is below the awareness floor) is
+  implemented but still unexercised in game.
 - ✅ ~~`03` follow-ups — retire the `Spike*`/`Heartbeat` placeholders + reconcile
   `telemetry.lua`'s stale "spike" header~~ **done 2026-07-20** (they corrupted
   sequence analysis — see `03`).

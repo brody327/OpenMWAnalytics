@@ -434,3 +434,48 @@ mechanism; Q3 is the JSONB-keeps-schema-stable consequence.
 **Action:** prioritize `06_DATA_MODEL.md` (storage strategy: columns vs JSONB,
 the unique constraint, upsert/idempotent ingest) to solidify this before moving on.
 Re-quiz on idempotency + storage mapping next session.
+
+---
+
+## 2026-07-20 — Analytics product design, sequence SQL, ops (a long session)
+
+**Concepts covered.** Question inventory / metric tree (decision → question → metric
+→ event) and inverting a registry from bottom-up to top-down; the denominator problem
+(engagement vs **exposure** events); why a pass-rate cannot separate good difficulty from
+bad (the discriminator is post-failure behaviour); **margin** vs pass/fail, and raw-vs-derived
+storage ("precompute at write time only what you cannot reconstruct at read time");
+window functions (`LEAD`, `ROW_NUMBER`) over `(session_id, seq)`; `WHERE` runs *before*
+window functions (hence the CTE); de-duplicating to the unit the question is about; ordinal
+vs categorical colour encoding; ingest auth threat modelling (what a client-side secret can
+and cannot buy) and **fail-closed** defaults; k8s secrets are read at container **start**;
+ingest provenance (`env`) as server-stamped metadata rather than an envelope field.
+
+**No formal quiz this session** — it was execution-heavy. The teaching landed in design
+docs `10` (new), `05` (auth threat model), `06` (`env`), `07 §4c/§5c`.
+
+**Recurring failure mode, hit FIVE times — worth naming as the session's lesson:**
+*silence that looks like success.*
+
+| Instance | How it presented |
+| --- | --- |
+| `pkill` on Windows | reported success, left the process listening → read stale output twice |
+| Chart dropped an unnamed bucket | a real abandonment looked like "this never happens" |
+| `LEAD` met an event type with no `CASE` branch | signal fell into `other`, then was discarded |
+| Placeholder `<TOKEN>` / `<NEW_PASSWORD>` pasted literally | command succeeded; the "secret" was public |
+| Scheduled Task ran with a bare environment | `OMWA_ENV` would have silently reverted to `prod` |
+
+Every one behaved correctly under manual testing and did the wrong thing unattended.
+The countermeasures now encoded: render unmatched buckets instead of dropping them,
+verify the **value** not the exit code, source config from a file rather than the
+environment, and check *"is the thing I am testing the thing I think I am testing?"* first.
+
+**Also learned by doing:** verify a credential at the lowest layer that can prove it
+(one `psql`) BEFORE adding layers — testing two unknowns at once cost four rounds; and
+never read a credentials file (a redaction regex leaked two passwords into a transcript,
+forcing a rotation).
+
+**Delegation experiment** (`SkillCheckResolved` Lua half via subagent): worth it for this
+task shape. Its most valuable output was a **gap in the spec** it found by executing it —
+the passive multi-stat path retains no deciding stat when nothing clears the awareness
+floor. Verdict recorded in memory: delegate work whose difficulty is in the DOING; keep
+work whose difficulty is in the DECIDING.
