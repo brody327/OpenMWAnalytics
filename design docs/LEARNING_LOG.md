@@ -502,7 +502,21 @@ at 100 rows, so nothing is measurable); why an index-using query still read 29,5
 `HashAggregate` (index supplied the ordering, no hash table); why the endpoint gained only 2×
 against the query's 13× (a second unoptimised query, and a response waits for its slowest part).
 
-**6 / 6 overall, including every distractor built to sound plausible.** No gap to re-teach.
+**6 / 6 overall — ⚠️ AND THE SCORE WAS MISLEADING.** The learner reported afterwards that
+they *"barely followed any of it."* Recorded here because the failure is instructive:
+
+- **Multiple choice tests recognition, not understanding.** Options can be eliminated and
+  pattern-matched without following any mechanism. The correct answers were also consistently
+  the longest and most detailed — a tell that can be exploited with zero comprehension.
+- **The session was demonstration, not instruction.** Commands were run, output shown and
+  conclusions narrated at speed. The learner watched a debugging session rather than
+  participating in one.
+- **Missed signal:** no clarifying questions were asked throughout. Genuine engagement with
+  unfamiliar mechanics almost always generates questions; silence was read as agreement.
+
+**Action: this material is to be re-taught granularly next session, before any new topic.**
+Assessment must move to prediction ("what plan will this produce, and why?"), explain-back in
+the learner's own words, and hands-on driving — not multiple choice.
 Contrast with the 2 / 4 on 2026-07-14 — the storage-mapping concept that was weak then
 (envelope → columns, payload → JSONB, and what that costs at query time) is now the concept
 being *applied* to decide where to promote a key out of JSONB.

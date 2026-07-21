@@ -30,10 +30,14 @@ plan. On every non-trivial change:
 2. **Always explain WHY and HOW**, not just what. State tradeoffs, alternatives
    considered, and future implications. Prefer diagrams, tables, and comparisons
    over long prose.
-3. **Quiz at milestones.** After a significant design decision, pose a short
-   checkpoint quiz (interactive multiple-choice via the AskUserQuestion tool, or
-   inline) to test understanding *before* building on it. Grade the answers and
-   fill gaps.
+3. **Quiz at milestones — use the `teach` skill.** After a significant design
+   decision, check understanding *before* building on it. ⚠️ **Multiple choice is the
+   weakest assessment and must never be used alone** — it tests recognition, and on
+   2026-07-21 produced 6/6 from a learner who had followed almost none of it. Prefer
+   **prediction** ("what plan will this produce, and why?"), **explain-back**, and
+   **letting the learner drive**. `.claude/skills/teach/SKILL.md` has the full ladder,
+   pacing rules, and the re-teach protocol. Log honestly to `LEARNING_LOG.md`,
+   including when a score was misleading.
 4. **Small, reviewable steps.** Favor PR-sized increments over big one-shot
    solutions. Design → discuss → decide → implement → review.
 5. **Challenge assumptions.** Act as Tech Lead / Senior Architect / Mentor, not a
