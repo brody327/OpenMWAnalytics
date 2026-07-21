@@ -479,3 +479,36 @@ task shape. Its most valuable output was a **gap in the spec** it found by execu
 the passive multi-stat path retains no deciding stat when nothing clears the awareness
 floor. Verdict recorded in memory: delegate work whose difficulty is in the DOING; keep
 work whose difficulty is in the DECIDING.
+
+---
+
+## 2026-07-21 — Postgres performance: plans, selectivity, index-only scans
+
+**Concepts covered:** the planner is cost-based, not rule-based (why a seq scan is *correct*
+on a small table); **selectivity** as the deciding factor for whether an index helps; index
+vs heap ("the catalogue tells you the shelf, not what's inside the book"); Bitmap Index Scan
+vs Index Scan vs **Index Only Scan**; `Buffers: hit` (cache) vs `read` (physical) as the real
+cost signal; warm-vs-cold measurement discipline; the visibility map's role in index-only
+scans; partial indexes; stored generated columns; `GroupAggregate` vs `HashAggregate` and
+sorted input; every index as a tax on writes.
+
+**Checkpoint quiz 1: 3 / 3** — why volume was a prerequisite (a seq scan is genuinely optimal
+at 100 rows, so nothing is measurable); why an index-using query still read 29,555 heap blocks
+(grouping keys live in `data` in the heap, not the index); why no index fixes `/stats/friction`
+(its filter matches ~99% of rows — nothing to narrow).
+
+**Checkpoint quiz 2: 3 / 3** — why the expression index barely helped (Postgres cannot
+*return* an expression's value from an index-only scan); why `GroupAggregate` beat
+`HashAggregate` (index supplied the ordering, no hash table); why the endpoint gained only 2×
+against the query's 13× (a second unoptimised query, and a response waits for its slowest part).
+
+**6 / 6 overall, including every distractor built to sound plausible.** No gap to re-teach.
+Contrast with the 2 / 4 on 2026-07-14 — the storage-mapping concept that was weak then
+(envelope → columns, payload → JSONB, and what that costs at query time) is now the concept
+being *applied* to decide where to promote a key out of JSONB.
+
+**The method worth keeping**, since it generalises past Postgres: measure warm and repeated;
+change ONE thing; when the result surprises you, **shrink the query until the behaviour
+changes** (`count(*)` vs selecting the expression isolated the real cause in one step); and
+force the planner's hand (`enable_bitmapscan = off`) as a *diagnostic* to see what the
+alternative would have cost — confirming the planner was right, rather than assuming it wrong.

@@ -19,8 +19,13 @@ import { db } from '../db/client.js';
 export async function confrontations(_req: Request, res: Response): Promise<void> {
   const byTopic = await db.execute(sql`
     select
-      data->>'suspect'                                          as suspect,
-      data->>'topic'                                           as topic,
+      -- Generated columns, not data->>'...'. An expression index can FILTER, ORDER and
+      -- COUNT on an expression, but Postgres cannot RETURN an expression's value from an
+      -- index-only scan -- so selecting data->>'suspect' forces a heap visit for every
+      -- matched row. Promoting the hot keys to stored generated columns makes an
+      -- index-only scan possible: 29,670 buffers -> 116, ~90ms -> ~7ms. See 06.
+      suspect,
+      topic,
       count(*)::int                                            as attempts,
       (count(*) filter (where (data->>'passed')::boolean))::int as passes,
       round(avg((data->>'passed')::boolean::int), 3)::float    as pass_rate

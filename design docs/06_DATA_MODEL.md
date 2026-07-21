@@ -300,3 +300,79 @@ it" is the interesting part.
 ⚠️ Synthetic rows never leave the local database, and `/stats/*` does not filter on `env`
 yet — so **local dashboard numbers are currently synthetic**, while production remains
 real. Do not read one as the other.
+
+---
+
+## Tuning round 1 — the confrontations aggregate (2026-07-21)
+
+**Result: 29,670 buffers → 116. ~90 ms → ~7 ms warm. Endpoint 0.31 s → 0.15 s.**
+
+### What we tried, and what each attempt taught
+
+**1. Warm the cache before measuring anything.** First run 3,900 ms, second 111 ms, third
+87 ms — same query, same plan. The first paid for physical reads; the rest hit
+`shared_buffers`. **Tuning against a cold cache measures the disk, not the plan.** Every
+number below is warm and repeated.
+
+**2. Partial expression index** — `((data->>'suspect'), (data->>'topic')) WHERE type = …`.
+Tiny (928 kB vs 62 MB for the full type index — the partial predicate paying off) and the
+planner used it. **Almost no improvement.** Still a 29,555-block Bitmap Heap Scan.
+
+**3. `VACUUM` — ruled out as the cause.** Index-only scans need the visibility map; after a
+bulk load it can be empty. Checked: `relallvisible` was already **100%**. Not the blocker.
+
+**4. Forcing the planner's hand** (`SET enable_bitmapscan = off`) — a plain Index Scan
+costing **113,690 buffers**, four times *worse* than the bitmap plan. **The planner's choice
+was correct.** Disabling a plan type to see the alternative is a diagnostic, not a fix.
+
+**5. The actual cause, isolated by shrinking the query.** On the *same index*:
+
+| Query | Plan |
+| --- | --- |
+| `count(*) WHERE type = …` | **Index Only Scan**, `Heap Fetches: 0`, 116 buffers |
+| `SELECT data->>'suspect' … GROUP BY 1` | Bitmap Heap Scan, 29,670 buffers |
+
+⭐ **Postgres can use an expression index to FILTER, ORDER and COUNT — but it cannot RETURN
+an expression's value from an index-only scan.** The computed value is in the index; the
+planner will not reconstruct output columns from expression entries. Need the value → fetch
+the row. Our query *outputs* those expressions, so the index could never have helped.
+
+**6. The fix — stored generated columns**, exactly as §2 anticipated ("promote a hot payload
+field to a real column or a generated column + index"):
+
+```sql
+ALTER TABLE events
+  ADD COLUMN suspect text GENERATED ALWAYS AS (data->>'suspect') STORED,
+  ADD COLUMN topic   text GENERATED ALWAYS AS (data->>'topic')   STORED;
+CREATE INDEX events_confrontation_cols_idx ON events (suspect, topic)
+  WHERE type = 'ConfrontationAttempted';
+```
+
+`GENERATED ALWAYS … STORED` rather than a plain column so the value **cannot drift** from
+`data` — Postgres recomputes it on write and nothing can set it inconsistently.
+
+New plan: **Index Only Scan, `Heap Fetches: 0`, 116 buffers**, and `HashAggregate` becomes
+`GroupAggregate` — the index returns rows pre-sorted by `(suspect, topic)`, so no 793 kB hash
+table is built. The ordering came free with the index.
+
+### Why the endpoint only doubled while the query got 13× faster
+
+`/stats/confrontations` runs **two** queries and the response waits for both. `byReason`
+still extracts `data->>'reason'` over every failed attempt. **A response is bounded by its
+slowest part** — optimising one of two caps the achievable gain. The next round either
+promotes `reason` too or rolls the whole endpoint into one precomputed result.
+
+### ⚠️ Migration cost, if this ever goes to RDS
+
+`ADD COLUMN … GENERATED … STORED` **rewrites the table** and holds an `ACCESS EXCLUSIVE`
+lock — 3.3 s here on 1M rows, i.e. 3.3 s of hard downtime for anything writing. On a live
+production table the safe path is different: add a plain nullable column, backfill in
+batches, add the index `CONCURRENTLY`, then swap reads. The local one-liner is a
+development convenience, not a production migration plan.
+
+### Cost side, stated honestly
+
+Two extra stored columns widen every row, and `events_confrontation_cols_idx` is another
+structure to maintain on every insert — **every index is a tax on writes**. The partial
+predicate keeps that tax proportional: 928 kB covering 13% of rows, not 62 MB covering all
+of them.

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   uuid,
@@ -48,6 +49,25 @@ export const events = pgTable(
 
     // --- payload ---
     data: jsonb('data').notNull().default({}),
+
+    // --- promoted hot keys (06 §2 anticipated this: "promote a hot payload field to a
+    // real column or a generated column + index") ---
+    //
+    // WHY, precisely: an expression index on (data->>'suspect') CAN filter, order and
+    // count -- but Postgres cannot RETURN an expression's value from an index-only scan.
+    // A query that SELECTs the extracted key therefore falls back to a heap visit for
+    // every matched row. Proven directly: count(*) on such an index got Heap Fetches: 0,
+    // while selecting the same expression paid a 29,555-block Bitmap Heap Scan.
+    //
+    // Stored generated columns hold the value as a real column, so an index over them
+    // supports a true index-only scan. Measured on 1M rows: 29,670 buffers -> 116,
+    // ~90ms -> ~7ms, and the plan drops from HashAggregate to GroupAggregate because the
+    // index supplies the ordering for free.
+    //
+    // GENERATED ALWAYS ... STORED (not a plain column) so the value cannot drift from
+    // `data` -- Postgres recomputes it on write; nothing can set it inconsistently.
+    suspect: text('suspect').generatedAlwaysAs(sql`data->>'suspect'`),
+    topic: text('topic').generatedAlwaysAs(sql`data->>'topic'`),
   },
   (t) => [
     // (session_id, seq) is BOTH the identity and the dedup key: a composite PK is
@@ -55,5 +75,12 @@ export const events = pgTable(
     primaryKey({ columns: [t.sessionId, t.seq] }),
     // Bread-and-butter analytics shape: "count <type> per day".
     index('events_type_ts_idx').on(t.type, t.ts),
+    // PARTIAL + COVERING: indexes only ConfrontationAttempted rows (13% of the table, so
+    // ~900kB against 62MB for the full type index), and carries both grouping keys so the
+    // aggregate never touches the heap. Every index is a tax on writes -- a partial one
+    // keeps that tax proportional to the rows a query actually cares about.
+    index('events_confrontation_cols_idx')
+      .on(t.suspect, t.topic)
+      .where(sql`type = 'ConfrontationAttempted'`),
   ],
 );
