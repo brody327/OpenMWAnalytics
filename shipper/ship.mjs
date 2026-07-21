@@ -26,6 +26,11 @@ const API = process.env.OMWA_API ?? 'http://localhost:4000/events';
 // Shared bearer token for the authenticated ingest path. Kept in the environment, never
 // in the repo. Unset is legal for a local API that is also unconfigured.
 const TOKEN = process.env.OMWA_INGEST_TOKEN ?? '';
+// Ingest provenance: 'dev' = the mod author exercising paths, 'prod' = a real play
+// session. Sent per batch; the API stamps it on every row. Defaults to 'prod' so an
+// unlabelled shipper is treated as real -- forgetting the flag then shows up in the player
+// set where it is visible and correctable, rather than being silently dropped.
+const ENV = (process.env.OMWA_ENV ?? 'prod').toLowerCase();
 const STATE = fileURLToPath(new URL('./.ship-state.json', import.meta.url));
 const SENTINEL = 'OMWA1 ';
 const POLL_MS = 1000;
@@ -90,6 +95,7 @@ async function post(batch) {
         // Ingest auth (design docs 05 / 09 §6). Omitted entirely when unset so a local
         // dev API that is also unconfigured behaves the same as it always did.
         ...(TOKEN && { Authorization: `Bearer ${TOKEN}` }),
+        'X-OMWA-Env': ENV,
       },
       body: JSON.stringify(batch),
     });
@@ -178,5 +184,5 @@ if (loadState()) {
   console.log(`[shipper] no checkpoint -- starting at EOF (offset=${offset})`);
 }
 console.log(`[shipper] tailing ${LOG}`);
-console.log(`[shipper] posting to ${API}`);
+console.log(`[shipper] posting to ${API} (env=${ENV})`);
 setInterval(pump, POLL_MS);

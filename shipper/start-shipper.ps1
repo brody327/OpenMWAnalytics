@@ -28,6 +28,11 @@
 .PARAMETER Quiet
     Suppress the banner. Used by the scheduled task, where nothing reads stdout.
 
+.PARAMETER Env
+    Ingest provenance: 'dev' (you exercising paths) or 'prod' (a real play session).
+    Defaults to 'prod'. Use -Env dev when generating test data, so authoring traffic never
+    gets counted as player behaviour.
+
 .EXAMPLE
     .\start-shipper.ps1
     Ship to the cloud using the token from shipper/.env.
@@ -41,7 +46,9 @@ param(
     [switch]$Local,
     [string]$Token,
     [string]$LogPath,
-    [switch]$Quiet
+    [switch]$Quiet,
+    [ValidateSet('dev', 'prod')]
+    [string]$Env = $(if ($env:OMWA_ENV) { $env:OMWA_ENV } else { 'prod' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -88,12 +95,20 @@ if (-not $Local -and -not $Token) {
 $label = if ($Local) { 'LOCAL' } else { 'CLOUD' }
 if ($Quiet) {
     # Unattended (scheduled task): one timestamped line so the log shows restarts.
-    Write-Output "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] start-shipper -> $label $target"
+    Write-Output "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] start-shipper -> $label $target (env=$Env)"
 }
 else {
     $colour = if ($Local) { 'Yellow' } else { 'Cyan' }
     Write-Host ''
     Write-Host "  shipping to $label -> $target" -ForegroundColor $colour
+    # Loud when marking data as authoring traffic -- mislabelling in either direction
+    # quietly corrupts the analysis, so the state is always on screen.
+    if ($Env -eq 'dev') {
+        Write-Host "  env         DEV - recorded as authoring data, excluded from player metrics" -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "  env         prod (real play session)" -ForegroundColor DarkGray
+    }
     if ($Token) {
         # Show only enough to tell two tokens apart. Never print the whole thing.
         $hint = if ($Token.Length -gt 8) { $Token.Substring(0, 4) + '...' + $Token.Substring($Token.Length - 4) } else { '(short)' }
@@ -105,6 +120,7 @@ else {
 
 # --- run --------------------------------------------------------------------
 $env:OMWA_API = $target
+$env:OMWA_ENV = $Env
 if ($Token) { $env:OMWA_INGEST_TOKEN = $Token }
 
 Push-Location $here

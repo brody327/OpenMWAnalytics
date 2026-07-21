@@ -31,6 +31,21 @@ export const events = pgTable(
       .notNull()
       .defaultNow(),
 
+    // --- ingest provenance (server-stamped, like received_at) ---
+    // 'dev' = the mod author exercising paths; 'prod' = a real play session. Authoring
+    // traffic is instrumentation-shaped, not behaviour-shaped: counting it as player
+    // behaviour is how a dashboard confidently reports something nobody did.
+    //
+    // NOT part of the event envelope (02): the Lua emitter cannot know whose machine it is
+    // on, and baking it in would ship as whatever value was left in the file. The SHIPPER
+    // knows, and it is a property of the collection run rather than of an event -- hence a
+    // per-batch header the API stamps here, exactly as it stamps received_at.
+    //
+    // Defaults to 'prod' so an unlabelled source is treated as real: a forgotten flag then
+    // pollutes the dev set (visible, correctable) rather than silently inflating the
+    // player set (invisible, permanent).
+    env: text('env').notNull().default('prod'),
+
     // --- payload ---
     data: jsonb('data').notNull().default({}),
   },

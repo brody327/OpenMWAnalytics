@@ -64,11 +64,42 @@ CREATE TABLE events (
     v            smallint    NOT NULL,     -- envelope: envelope schema version
     ts           timestamptz NOT NULL,     -- event time  (when it happened, game clock) — see §5
     received_at  timestamptz NOT NULL DEFAULT now(),  -- processing time (when we ingested)
+    env          text        NOT NULL DEFAULT 'prod', -- ingest provenance: 'dev' | 'prod'
     data         jsonb       NOT NULL DEFAULT '{}',    -- payload: type-specific body
 
     PRIMARY KEY (session_id, seq)          -- natural key = dedup key (see §4)
 );
 ```
+
+### `env` — separating authoring traffic from play (added 2026-07-20)
+
+`'dev'` = the mod author exercising code paths; `'prod'` = a real play session.
+
+**Why it exists:** the author generates events by *testing* — repeating a check twenty
+times, deliberately failing a confrontation to see the failure branch. That traffic is
+**instrumentation-shaped, not behaviour-shaped**, and counting it as player behaviour is how
+a dashboard confidently reports something nobody actually did. (Exactly that happened here:
+a deliberate probe was read as a genuine player error.)
+
+**Why it is NOT in the event envelope (`02`):** the envelope is what the *emitter* asserts
+about an event, and the Lua emitter cannot know whose machine it is running on — baking a
+value in would ship as whatever was left in the file. The **shipper** knows, and what it
+knows is a property of the *collection run*, not of any single event. So it is **ingest
+metadata**, stamped server-side from a per-batch `X-OMWA-Env` header — the same category as
+`received_at`, which the API already stamps.
+
+**Why it defaults to `'prod'`:** an unlabelled source is treated as real. Forgetting the
+flag then pollutes the *dev* set — visible and correctable — rather than silently inflating
+the *player* set, which is invisible and permanent. An unrecognised header value also falls
+back to `'prod'` rather than erroring: a mislabelled batch should still be collected.
+
+**Not retrofittable.** Rows collected before this column existed cannot be classified after
+the fact; all 1,146 pre-existing rows were authoring traffic and were marked `'dev'` in one
+statement. That is the whole argument for adding the dimension *early* — the cost of
+omitting it is paid permanently, in data you can never separate.
+
+**Consumers do not filter on it yet**, because there is no player data to separate. When
+real sessions arrive, `/stats/*` should default to `env = 'prod'` and expose dev deliberately.
 
 Field rationale in brief: envelope fields become **columns** because we filter,
 group, and join on them (time series, per-type, per-install). `data` stays a blob
