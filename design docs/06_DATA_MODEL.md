@@ -248,3 +248,55 @@ None of this is built now. The single append-only table + upsert is the whole MV
 
 Interactive re-quiz follows (targets the two prior gaps: idempotency and storage
 mapping, plus JSONB reasoning). Results → `LEARNING_LOG.md`.
+
+---
+
+## Performance baseline (2026-07-20) — before any tuning
+
+Postgres performance work needs volume before it means anything: over ~100 real rows every
+plan is a sequential scan and correctly so. `api/scripts/generate-load.mjs` generates
+realistic synthetic volume (`env='synthetic'`, **local database only**, refuses a non-local
+`DATABASE_URL`).
+
+**Why the distribution matters more than the row count.** Uniform random data teaches the
+wrong lessons: index selectivity depends on cardinality and skew, so if every value appears
+equally often then every index looks equally good, planner estimates are trivially right,
+and the cases that actually matter — a partial index, a composite column *order*, a matview
+that beats a live aggregate — never arise. The generator models sessions-per-install as a
+power law, events-per-session log-normally, payload values Zipf, and the type mix measured
+from real data.
+
+**Dataset:** 1,000,000 synthetic events · 9,245 sessions · 2,000 installs · 180 days ·
+seeded (`--seed 42`, reproducible) · written in **15.7 s** (~64k rows/s) via a single
+`unnest()`-based parameterised INSERT per batch. Table: **355 MB total / 233 MB heap**.
+Session sizes p50 **60**, p90 **239**, p99 **744**, max **4000**. Record-level skew
+confirmed: 116k / 43k / 32k / 27k across the hot checks.
+
+### Endpoint latency at 1M rows
+
+| Endpoint | Time |
+| --- | --- |
+| `/stats/confrontations` | 0.31 s |
+| `/stats/skills` | 1.10 s |
+| `/stats/friction` | **1.42 s** |
+
+### What the plans say (the tuning targets)
+
+**`/stats/confrontations` — 119 ms in-database.** The `(type, ts)` index *is* used (Bitmap
+Index Scan → 130k rows), but the aggregate groups on `data->>'suspect'` / `data->>'topic'`,
+which the index cannot supply — so it pays a **Bitmap Heap Scan of 29,555 heap blocks**
+(26,080 of them physical reads). The index finds the rows; the heap visit dominates.
+Candidates: expression indexes on the extracted keys, a covering index (`INCLUDE`), a
+partial index on the hot `type`, or a rollup.
+
+**`/stats/friction` — the expensive one, and a different problem.** Its filter is
+`type NOT IN ('Heartbeat','SpikeStarted')`, which matches nearly every row, so there is
+nothing to be selective about: the planner takes a **Parallel Seq Scan over all 1M rows**,
+then windows and filters afterwards. Note the ordering the window needs —
+`PARTITION BY session_id ORDER BY seq` — is *exactly* the primary key order, which a plan
+could exploit to avoid a sort. That gap between "the order exists" and "the planner used
+it" is the interesting part.
+
+⚠️ Synthetic rows never leave the local database, and `/stats/*` does not filter on `env`
+yet — so **local dashboard numbers are currently synthetic**, while production remains
+real. Do not read one as the other.
