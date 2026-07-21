@@ -58,19 +58,31 @@ $CloudApi = 'https://api.omwanalytics.com/events'
 $LocalApi = 'http://localhost:4000/events'
 $target = if ($Local) { $LocalApi } else { $CloudApi }
 
-# --- resolve the token: -Token > shipper/.env > environment ------------------
-if (-not $Token) {
-    $envFile = Join-Path $here '.env'
-    if (Test-Path $envFile) {
-        foreach ($line in Get-Content $envFile) {
-            if ($line -match '^\s*OMWA_INGEST_TOKEN\s*=\s*(.+?)\s*$') {
-                # Strip surrounding quotes if present.
-                $Token = $Matches[1].Trim('"').Trim("'")
-            }
+# --- read shipper/.env: token + env ------------------------------------------
+# BOTH must come from the file, not just the token: the Scheduled Task runs with a bare
+# environment, so anything sourced only from $env:* silently falls back to its default at
+# every logon. That would have quietly stamped the author's own sessions as 'prod'.
+$fileToken = $null
+$fileEnv = $null
+$envFile = Join-Path $here '.env'
+if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match '^\s*OMWA_INGEST_TOKEN\s*=\s*(.+?)\s*$') {
+            $fileToken = $Matches[1].Trim('"').Trim("'")   # strip quotes if present
+        }
+        elseif ($line -match '^\s*OMWA_ENV\s*=\s*(.+?)\s*$') {
+            $fileEnv = $Matches[1].Trim('"').Trim("'").ToLower()
         }
     }
 }
+
+# Precedence: explicit parameter > .env file > process environment > default.
+if (-not $Token) { $Token = $fileToken }
 if (-not $Token) { $Token = $env:OMWA_INGEST_TOKEN }
+if (-not $PSBoundParameters.ContainsKey('Env') -and $fileEnv) {
+    if ($fileEnv -notin @('dev', 'prod')) { throw "OMWA_ENV in $envFile must be 'dev' or 'prod', got '$fileEnv'" }
+    $Env = $fileEnv
+}
 
 # Fail fast rather than let every batch 401 in a retry loop. The shipper holds its
 # offset on failure so nothing would be lost -- but a wall of 401s is a worse way to

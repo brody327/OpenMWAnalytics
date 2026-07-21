@@ -71,15 +71,32 @@ CREATE TABLE events (
 );
 ```
 
-### `env` — separating authoring traffic from play (added 2026-07-20)
+### `env` — separating the author from real players (added 2026-07-20)
 
-`'dev'` = the mod author exercising code paths; `'prod'` = a real play session.
+**`'dev'` = the mod author's machine. `'prod'` = a genuine third-party player.**
 
-**Why it exists:** the author generates events by *testing* — repeating a check twenty
-times, deliberately failing a confrontation to see the failure branch. That traffic is
-**instrumentation-shaped, not behaviour-shaped**, and counting it as player behaviour is how
-a dashboard confidently reports something nobody actually did. (Exactly that happened here:
-a deliberate probe was read as a genuine player error.)
+**The boundary is the SOURCE, not the intent** (corrected 2026-07-20 after the first
+framing was pushed back on). The first version defined `dev` as "the author *testing*" —
+repeating a check twenty times, deliberately failing a confrontation to see the branch — and
+`prod` as the author playing normally. That is wrong, for two reasons:
+
+1. **Author data is unrepresentative however carefully it is played.** You know the
+   solution, you know which evidence matters, you know where the vents are. You cannot be a
+   naive player of your own mystery. A "natural" authored playthrough is a marginally better
+   proxy than deliberate spam — still a weak one, and it does not belong in the set that
+   means *real*.
+2. **Intent cannot be recorded reliably.** It would require judging your own mindset
+   mid-session. Source is a property of the machine: set once, impossible to get wrong.
+
+So while the author is the only user, **every** event is `'dev'`. The column carries no
+information *today* — and is still worth having, because the moment a third party plays it
+becomes the difference between a dataset you can trust and one you cannot, and it cannot be
+added retroactively.
+
+The original motivation still holds: authoring traffic is **instrumentation-shaped, not
+behaviour-shaped**, and counting it as player behaviour is how a dashboard confidently
+reports something nobody actually did — which happened here, when a deliberate probe was
+read as a genuine player error.
 
 **Why it is NOT in the event envelope (`02`):** the envelope is what the *emitter* asserts
 about an event, and the Lua emitter cannot know whose machine it is running on — baking a
@@ -88,10 +105,16 @@ knows is a property of the *collection run*, not of any single event. So it is *
 metadata**, stamped server-side from a per-batch `X-OMWA-Env` header — the same category as
 `received_at`, which the API already stamps.
 
-**Why it defaults to `'prod'`:** an unlabelled source is treated as real. Forgetting the
-flag then pollutes the *dev* set — visible and correctable — rather than silently inflating
-the *player* set, which is invisible and permanent. An unrecognised header value also falls
-back to `'prod'` rather than erroring: a mislabelled batch should still be collected.
+**Why it defaults to `'prod'`:** the default is written for the *distributed* case — a
+player's shipper needs no configuration to be labelled correctly. The **author's** machine
+overrides it once, in `shipper/.env` (`OMWA_ENV=dev`), and every session from that machine
+is then marked without further thought. An unrecognised header value also falls back to
+`'prod'` rather than erroring: a mislabelled batch should still be collected.
+
+⚠️ Both the token **and** `OMWA_ENV` are read from `shipper/.env`, not just the token — the
+Scheduled Task runs with a bare environment, so anything sourced only from the process
+environment silently reverts to its default at every logon. That would have quietly stamped
+the author's own sessions `'prod'`.
 
 **Not retrofittable.** Rows collected before this column existed cannot be classified after
 the fact; all 1,146 pre-existing rows were authoring traffic and were marked `'dev'` in one
