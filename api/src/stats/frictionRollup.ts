@@ -121,10 +121,11 @@ export async function refreshFrictionRollup(lateness = '10 minutes'): Promise<nu
     //     the live query in stats/friction.ts does. Same values by construction -- the columns are
     //     GENERATED ALWAYS from exactly those expressions -- but they're indexed and heap-cheap.
     await tx.execute(sql`
-      insert into friction_attempts_rollup (session_id, suspect, topic, total_attempts, attempts_to_pass)
+      insert into friction_attempts_rollup (session_id, install_id, suspect, topic, total_attempts, attempts_to_pass)
       with attempts as (
         select
           session_id,
+          install_id,
           suspect,
           topic,
           passed,
@@ -138,12 +139,16 @@ export async function refreshFrictionRollup(lateness = '10 minutes'): Promise<nu
       )
       select
         session_id,
+        install_id,
         suspect,
         topic,
         count(*)::int                         as total_attempts,
         min(attempt_no) filter (where passed) as attempts_to_pass
       from attempts
-      group by session_id, suspect, topic
+      -- install_id joins the GROUP BY rather than being wrapped in an aggregate: it is
+      -- functionally dependent on session_id (one launch, one install), so the groups are
+      -- identical either way. (And uuid has no min()/max() aggregate in Postgres anyway.)
+      group by session_id, install_id, suspect, topic
       on conflict (session_id, suspect, topic) do nothing
     `);
 

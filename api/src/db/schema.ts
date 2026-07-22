@@ -153,6 +153,17 @@ export const frictionAttemptsRollup = pgTable(
   'friction_attempts_rollup',
   {
     sessionId: uuid('session_id').notNull(),
+    // Denormalized from events, and NOT part of the key -- one session has exactly one install,
+    // so it adds no uniqueness. It is here so a cross-SESSION question can be asked without
+    // rejoining events: doc 10 Q1.7 ("do players who quit on a topic ever come back and beat
+    // it?") groups these per-session rows by install_id at READ time.
+    //
+    // That works only because the aggregation is set-based (does this install have both an
+    // unsolved and a solved session for this topic?) rather than an install_id-partitioned
+    // WINDOW. A window partitioned by install_id would break the rollup's whole correctness
+    // argument -- a new session could change a prior partition's answer, so no partition would
+    // ever be frozen. Aggregating at read over rows that are individually frozen costs nothing.
+    installId: uuid('install_id').notNull(),
     suspect: text('suspect').notNull(),
     topic: text('topic').notNull(),
     totalAttempts: integer('total_attempts').notNull(),

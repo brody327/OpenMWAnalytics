@@ -571,8 +571,9 @@ Storing `0` would destroy that distinction.
    partition's answer, so no partition is ever frozen and the incremental fold is invalid. The
    set-based version aggregates **at read time over `friction_attempts_rollup`**, whose rows are
    per-session and individually frozen, so it costs the rollup nothing. It is answerable only
-   because round 4 declined to collapse the session dimension. Prerequisite: add `install_id` to
-   `friction_attempts_rollup` (one column; re-fold is ~1.5 s -- do it before the table grows).
+   because round 4 declined to collapse the session dimension. **`install_id` added to
+   `friction_attempts_rollup` + back-folded 2026-07-22** (values unchanged, `EXCEPT` 0/0, 0
+   mismatches vs `events`); the query is proven, only the dashboard view remains.
 
 ---
 

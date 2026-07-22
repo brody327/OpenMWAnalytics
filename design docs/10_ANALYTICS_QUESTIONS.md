@@ -135,7 +135,7 @@ view) · ❌ needs new events.
 | 1.4 | What do players do *after* failing? | good friction vs. bad friction (§3.1) | next-event distribution after a fail | existing (`LEAD`) | ✅ API |
 | 1.5 | Which failure *modes* dominate? | fix the specific confusion | `reason` breakdown | `ConfrontationAttempted.reason` | ✅ |
 | 1.6 | Is anything effectively unpassable? | unwinnable-state bug hunt | checks with 0 passes and n ≥ threshold | existing | ✅ API |
-| 1.7 | Do players who quit on a topic ever come back and beat it? | is `session_end` churn, or just bedtime | per **install**: topics with ≥1 unsolved session *and* ≥1 solved session | existing (`install_id`) | 🟡 needs 1 column |
+| 1.7 | Do players who quit on a topic ever come back and beat it? | is `session_end` churn, or just bedtime | per **install**: topics with ≥1 unsolved session *and* ≥1 solved session | existing (`install_id`) | 🟡 query proven, no view |
 
 **Why 1.7 exists — it reinterprets 1.4's loudest signal.** `session_end` is currently our
 *worst* post-failure bucket (§3.1), but it is ambiguous: "rage-quit for good" and "it was
@@ -170,8 +170,28 @@ An install's answer changes as sessions arrive, and that is fine: nothing about 
 persisted. This is the fine-grain payoff from `06` round 4 arriving earlier than expected — the
 question is answerable *only* because we declined to collapse the session dimension away.
 
-**Prerequisite:** `friction_attempts_rollup` needs `install_id` added (one column; it is already
-on every event, and a truncate-and-re-fold is ~1.5 s). Do this before the table grows.
+**✅ Prerequisite done (2026-07-22):** `friction_attempts_rollup.install_id` added and back-folded
+(9,255 sessions, 1.36 s; row values unchanged — symmetric `EXCEPT` 0/0 — and 0 mismatches against
+`events`). The query is proven and needs no `events` join and no window:
+
+```sql
+select suspect, topic,
+       count(*) filter (where solved and unsolved)     as came_back_and_won,
+       count(*) filter (where unsolved and not solved) as never_solved_any_session,
+       count(*)                                        as installs
+from (
+  select install_id, suspect, topic,
+         bool_or(attempts_to_pass is not null) as solved,
+         bool_or(attempts_to_pass is null)     as unsolved
+  from friction_attempts_rollup group by install_id, suspect, topic
+) per_install
+group by suspect, topic;
+```
+
+Note `bool_or` is associative but **not invertible** — same family as `max` (`06` round 4). That
+is fine *here* precisely because it is computed at read from retained rows and never stored.
+
+**Remaining: the dashboard view.** The number is not meaningful until real players exist (§3.3).
 
 **Honest limits, both of which must ship with the metric:**
 - `install_id` is an *install*, not a person: a reinstall splits one player in two, a shared
