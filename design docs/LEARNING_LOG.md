@@ -878,3 +878,46 @@ the Running pod and compare the image *digest* — `items[0]` is not "the curren
 
 **Verified after the fix:** all four endpoints 200 with real data; fold ran (10 settled sessions);
 CronJob armed at `*/5`; 0 null `install_id`, 1 distinct install (the author — correct).
+
+### 2026-07-22 (later still) — Migrations as an initContainer, and the hybrid read
+
+Both items came straight out of the outage/regression list, so this was remediation, not new
+feature work. Teaching was thinner here by design — the learner asked to execute.
+
+**Migrations.** The interesting problem was **baselining**: adopting a migration tool onto a
+database that already has the schema. `drizzle-kit generate` emits bare `CREATE TABLE`s that fail
+against both DBs. Two options weighed in the code comments: add `IF NOT EXISTS` (rejected — it
+runs *green* against a drifted table, the same silent-wrongness class as the outage) vs. record
+the migration's hash as applied without running it (chosen — asserts exactly what is true).
+Required reading drizzle's migrator to learn the record is `sha256(file contents)` in
+`drizzle.__drizzle_migrations`. Verified the baseline's *claim* rather than trusting it: local and
+RDS column shapes diffed clean.
+
+Two traps caught, both of the "not-compiled-but-required" family:
+1. The Dockerfile copies only `dist/`, so `drizzle/` had to be copied explicitly — the same miss
+   that kept `scripts/` out of the image earlier the same day.
+2. `.gitattributes` — the applied-migration record is a hash of file BYTES, and `core.autocrlf=true`
+   would give Windows CRLF and CI LF, so an applied migration would look pending, be re-run, and
+   fail. **My first attempt at the rule silently did nothing**: a gitattributes pattern containing
+   a slash is anchored to the file's directory, so `drizzle/**` missed `api/drizzle/**`. Caught it
+   only because the commit output still warned about line endings; fixed with `**/drizzle/**` and
+   verified with `git check-attr` instead of assuming.
+
+**Hybrid read.** Design point worth keeping: the split key is the **done-guard, not the
+watermark**. Splitting on settled/unsettled leaves a gap where a settled-but-unfolded session is
+in neither half and briefly *disappears* — worse than stale, because the number silently shrinks.
+Folded/not-folded is exhaustive, which also demotes the fold to a pure optimisation: a dead cron
+now makes the endpoint slower, not wrong.
+
+**The payoff nobody designed for:** the halves merge with `UNION ALL` + re-aggregate *only*
+because round 3 stored decomposable parts (sum+count, avg derived) and round 4 kept per-session
+grain. Two rules adopted for other reasons turned out to be what made this feature possible at
+all. Worth showing the learner as the argument for principled constraints over local optimisation.
+
+**Measured before designing, again:** the obvious `select distinct session_id from events`
+anti-join cost **653 ms** — more than the query the rollup replaced (no skip-scan in PG16, so it
+walks all 1M PK entries). Bounded by `received_at` + a new index instead.
+
+**Verification standard held:** proven identical in three modes — 100% folded, 100% live, and
+MIXED (9,255 folded + 1 fresh session vs. a full live recompute). The mixed case is the only one
+where a double-count or dropped session could hide, and it is the state production is always in.
