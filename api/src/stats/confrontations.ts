@@ -19,28 +19,37 @@ import { db } from '../db/client.js';
 export async function confrontations(_req: Request, res: Response): Promise<void> {
   const byTopic = await db.execute(sql`
     select
-      -- Generated columns, not data->>'...'. An expression index can FILTER, ORDER and
-      -- COUNT on an expression, but Postgres cannot RETURN an expression's value from an
-      -- index-only scan -- so selecting data->>'suspect' forces a heap visit for every
-      -- matched row. Promoting the hot keys to stored generated columns makes an
-      -- index-only scan possible: 29,670 buffers -> 116, ~90ms -> ~7ms. See 06.
+      -- Group on the STORED generated columns suspect/topic and read the passed column (all
+      -- three materialized, see 06), not data->>'...'. Measured on PG16: a plain index on
+      -- stored generated columns supports an INDEX ONLY SCAN (0 heap fetches), whereas an
+      -- expression index over the same data->>'x' does not -- it falls back to a bitmap/heap
+      -- scan even when heap-touching plans are forced off. Materializing the hot keys is what
+      -- makes an index-only scan possible at all.
+      --
+      -- events_confrontation_cols_idx (suspect, topic, passed) carries every column this
+      -- query reads, so it runs as a fully index-only GroupAggregate -- no heap visit for the
+      -- JSONB payload. passed is a boolean generated column, so filter/avg use it directly.
       suspect,
       topic,
-      count(*)::int                                            as attempts,
-      (count(*) filter (where (data->>'passed')::boolean))::int as passes,
-      round(avg((data->>'passed')::boolean::int), 3)::float    as pass_rate
+      count(*)::int                             as attempts,
+      (count(*) filter (where passed))::int     as passes,
+      round(avg(passed::int), 3)::float         as pass_rate
     from events
     where type = 'ConfrontationAttempted'
     group by suspect, topic
     order by attempts desc, suspect, topic
   `);
 
+  // Reference the generated columns reason/passed, not data->>'...', so the planner can
+  // use events_confrontation_reason_idx (passed, reason) for an index-only scan. The partial
+  // predicate + leading passed mean the failed rows are found in the index and reason rides
+  // along -- no heap visit for the JSONB payload.
   const byReason = await db.execute(sql`
     select
-      data->>'reason'  as reason,
-      count(*)::int    as count
+      reason,
+      count(*)::int as count
     from events
-    where type = 'ConfrontationAttempted' and not (data->>'passed')::boolean
+    where type = 'ConfrontationAttempted' and not passed
     group by reason
     order by count desc
   `);

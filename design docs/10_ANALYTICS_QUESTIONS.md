@@ -135,6 +135,70 @@ view) · ❌ needs new events.
 | 1.4 | What do players do *after* failing? | good friction vs. bad friction (§3.1) | next-event distribution after a fail | existing (`LEAD`) | ✅ API |
 | 1.5 | Which failure *modes* dominate? | fix the specific confusion | `reason` breakdown | `ConfrontationAttempted.reason` | ✅ |
 | 1.6 | Is anything effectively unpassable? | unwinnable-state bug hunt | checks with 0 passes and n ≥ threshold | existing | ✅ API |
+| 1.7 | Do players who quit on a topic ever come back and beat it? | is `session_end` churn, or just bedtime | per **install**: topics with ≥1 unsolved session *and* ≥1 solved session | existing (`install_id`) | 🟡 query proven, no view |
+
+**Why 1.7 exists — it reinterprets 1.4's loudest signal.** `session_end` is currently our
+*worst* post-failure bucket (§3.1), but it is ambiguous: "rage-quit for good" and "it was
+midnight" produce identical rows. The discriminator is what happens in the player's *next*
+session. If most `session_end` players return and solve it, the bucket is over-alarming and
+should be de-emphasised in the UI. If they never play again, it is the most important number
+on the dashboard. We cannot currently tell, and we are showing it as if we can.
+
+**Why it looked impossible, and why it isn't.** Q1.3/1.4 use windows partitioned by
+`session_id`, and every launch mints a fresh one — so a window *structurally cannot* see across
+sessions. That is a property of the query, not of the data: `install_id` is persistent and sits
+on every event, so the sessions of one install are joinable.
+
+**The measurement design decision (2026-07-22), and it is the load-bearing one.** There are two
+ways to ask this, and they are not equivalent:
+
+| | **Ordered** — "failed, quit, *then later* solved" | **Set-based** ✅ chosen — "this install has both an unsolved and a solved session for this topic" |
+| --- | --- | --- |
+| Shape | window partitioned by `install_id` | plain aggregate over per-session rows |
+| Ordering key | `ts` — because `seq` restarts per session | none needed |
+| Trusts client clocks | **yes** (skew reorders sessions) | no |
+| Rollup-safe | **no** — see below | **yes** |
+
+The ordered version breaks the entire rollup correctness argument (`06`, rounds 3–4): that rests
+on *partition by `session_id` + each launch mints a new one ⇒ a settled session's partition is
+frozen forever*. Partition by `install_id` instead and a new session **can** change a prior
+partition's answer, so nothing is ever settled and the incremental fold is invalid.
+
+The set-based version has no such problem, because the cross-session aggregation happens **at
+read time over `friction_attempts_rollup`** — whose rows are per-session and individually frozen.
+An install's answer changes as sessions arrive, and that is fine: nothing about it was ever
+persisted. This is the fine-grain payoff from `06` round 4 arriving earlier than expected — the
+question is answerable *only* because we declined to collapse the session dimension away.
+
+**✅ Prerequisite done (2026-07-22):** `friction_attempts_rollup.install_id` added and back-folded
+(9,255 sessions, 1.36 s; row values unchanged — symmetric `EXCEPT` 0/0 — and 0 mismatches against
+`events`). The query is proven and needs no `events` join and no window:
+
+```sql
+select suspect, topic,
+       count(*) filter (where solved and unsolved)     as came_back_and_won,
+       count(*) filter (where unsolved and not solved) as never_solved_any_session,
+       count(*)                                        as installs
+from (
+  select install_id, suspect, topic,
+         bool_or(attempts_to_pass is not null) as solved,
+         bool_or(attempts_to_pass is null)     as unsolved
+  from friction_attempts_rollup group by install_id, suspect, topic
+) per_install
+group by suspect, topic;
+```
+
+Note `bool_or` is associative but **not invertible** — same family as `max` (`06` round 4). That
+is fine *here* precisely because it is computed at read from retained rows and never stored.
+
+**Remaining: the dashboard view.** The number is not meaningful until real players exist (§3.3).
+
+**Honest limits, both of which must ship with the metric:**
+- `install_id` is an *install*, not a person: a reinstall splits one player in two, a shared
+  machine merges two players into one. It is the right grain available under the identity model
+  (`02`, anonymous UUIDs only, no accounts) — but it is a floor on precision, not a detail.
+- With a population of one (the author, all `env='dev'`) this number means nothing yet. It is
+  gated on real players by §3.3, like every other rate here.
 
 **Why margin is the star (1.2):** pass/fail says *that* it failed; margin says *by how
 much*. Failed-by-2 across the board means the threshold is one point off — a five-minute

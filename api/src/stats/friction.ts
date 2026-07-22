@@ -48,88 +48,45 @@ export async function friction(_req: Request, res: Response): Promise<void> {
   // NOTE session_end is *inferred*: there is no SessionEnded event, and a crash, an
   // alt-F4 and a clean quit are indistinguishable from the log. It really means
   // "last observed activity" (doc 10 §4, module 4 caveat).
+  // Read from the precomputed friction_rollup, NOT the live LEAD window. The window scans the
+  // whole (session_id, seq) stream (~776 ms, ~62k buffers) and no index can narrow it -- a
+  // window function depends on row adjacency, not any seekable value. The rollup precomputes
+  // this per settled session exactly once (see stats/frictionRollup.ts + design docs 06).
+  //
+  // avg is DERIVED here (sum/gap_count), not stored: you cannot average averages, and AVG
+  // ignores NULL gaps, so its denominator is gap_count (non-null), not count. nullif guards
+  // the session_end buckets (all gaps NULL -> avg NULL), matching the live query exactly.
   const afterFailure = await db.execute(sql`
-    with stream as (
-      select
-        session_id,
-        seq,
-        type,
-        ts,
-        data,
-        lead(type) over w as next_type,
-        lead(data) over w as next_data,
-        lead(ts)   over w as next_ts
-      from events
-      where type not in ('Heartbeat', 'SpikeStarted')
-      window w as (partition by session_id order by seq)
-    ),
-    fails as (
-      select
-        data->>'suspect' as suspect,
-        data->>'topic'   as topic,
-        case
-          when next_type is null then 'session_end'
-          when next_type = 'ConfrontationAttempted'
-               and next_data->>'suspect' = data->>'suspect'
-               and next_data->>'topic'   = data->>'topic'   then 'retried_same'
-          -- ConfrontationExited is AUTHORITATIVE where left_area was only inferred:
-          -- the player explicitly closed the panel. The completed flag separates "left
-          -- because the suspect was finished" from "gave up". Ordered BEFORE the AreaEntered
-          -- branch, since an exit is usually followed by movement anyway.
-          when next_type = 'ConfrontationExited'
-               and (next_data->>'completed')::boolean       then 'exited_solved'
-          when next_type = 'ConfrontationExited'            then 'abandoned'
-          when next_type = 'ConfrontationAttempted'         then 'switched_topic'
-          when next_type = 'AreaEntered'                    then 'left_area'
-          else 'other'
-        end as next_action,
-        extract(epoch from (next_ts - ts)) as gap_seconds
-      from stream
-      where type = 'ConfrontationAttempted'
-        and not (data->>'passed')::boolean
-    )
     select
       suspect,
       topic,
       next_action,
-      count(*)::int                                    as count,
-      round(avg(gap_seconds)::numeric, 1)::float       as avg_gap_seconds
-    from fails
-    group by suspect, topic, next_action
+      count,
+      round((sum_gap_seconds / nullif(gap_count, 0))::numeric, 1)::float as avg_gap_seconds
+    from friction_rollup
     order by count desc, suspect, topic
   `);
 
   // Q1.3 / Q1.6 -- how many attempts precede a success, and is anything unpassable.
   //
   // ROW_NUMBER() numbers each attempt within (session, suspect, topic); the first
-  // row_number carrying passed=true is therefore "it took this many tries."
-  // `min(...) FILTER (WHERE passed)` is NULL when a session never solved it -- which
-  // is the point: count(attempts_to_pass) then counts only the sessions that DID
-  // solve it, and solved=0 with attempts>0 is the unpassable-content signal (Q1.6).
+  // row_number carrying passed=true is therefore "it took this many tries." That per-session
+  // number is what the rollup stores, and it is NULL when a session never solved it -- which is
+  // the point: count(attempts_to_pass) counts only the sessions that DID solve it, so solved=0
+  // with attempts>0 is the unpassable-content signal (Q1.6).
+  //
+  // Read from friction_attempts_rollup, NOT the live ROW_NUMBER window (~324 ms, ~31.5k buffers,
+  // and no index can narrow it -- a window function depends on row adjacency, not a seekable
+  // value). The rollup stores the `per_session` CTE below, precomputed once per settled session;
+  // the outer aggregation that used to run over a freshly-windowed 1M-row scan now runs over a
+  // few thousand stored rows.
+  //
+  // Deliberately kept at PER-SESSION grain rather than collapsed to (suspect, topic): it makes
+  // the fold idempotent by natural key, keeps `max` recomputed rather than stored (max is not
+  // invertible, so a stored one can only ever be repaired by full recompute), and leaves the
+  // distribution intact so a future median/p90 stays answerable -- none of which survive a
+  // collapse. See schema.ts frictionAttemptsRollup for the full argument.
   const attemptsToPass = await db.execute(sql`
-    with attempts as (
-      select
-        session_id,
-        data->>'suspect'                as suspect,
-        data->>'topic'                  as topic,
-        (data->>'passed')::boolean      as passed,
-        row_number() over (
-          partition by session_id, data->>'suspect', data->>'topic'
-          order by seq
-        )                               as attempt_no
-      from events
-      where type = 'ConfrontationAttempted'
-    ),
-    per_session as (
-      select
-        session_id,
-        suspect,
-        topic,
-        count(*)::int                              as total_attempts,
-        min(attempt_no) filter (where passed)      as attempts_to_pass
-      from attempts
-      group by session_id, suspect, topic
-    )
     select
       suspect,
       topic,
@@ -138,7 +95,7 @@ export async function friction(_req: Request, res: Response): Promise<void> {
       sum(total_attempts)::int                             as total_attempts,
       round(avg(attempts_to_pass)::numeric, 2)::float      as avg_attempts_to_pass,
       max(total_attempts)::int                             as max_attempts_in_a_session
-    from per_session
+    from friction_attempts_rollup
     group by suspect, topic
     order by solved_sessions asc, total_attempts desc, suspect, topic
   `);

@@ -337,6 +337,16 @@ an expression's value from an index-only scan.** The computed value is in the in
 planner will not reconstruct output columns from expression entries. Need the value → fetch
 the row. Our query *outputs* those expressions, so the index could never have helped.
 
+> ⚠️ **Correction (2026-07-21, re-measured on PG16 — see "Tuning round 2" below).** The
+> sharper, verified statement is: **an expression index does not support an index-only scan at
+> all** — not even for `count(*)`. Forcing the planner (`enable_bitmapscan = off;
+> enable_seqscan = off`) still produced a plain, heap-touching Index Scan, never an Index Only
+> Scan. A plain index over a **stored generated column** *does* get an index-only scan (Heap
+> Fetches: 0) for both counting and returning the value. Same conclusion — materialise the
+> expression — cleaner mechanism. The "116 buffers" figure below was a count-only query; the
+> real byTopic aggregate also reads `passed`, so it was never index-only until `passed` was
+> promoted too (round 2).
+
 **6. The fix — stored generated columns**, exactly as §2 anticipated ("promote a hot payload
 field to a real column or a generated column + index"):
 
@@ -362,6 +372,45 @@ still extracts `data->>'reason'` over every failed attempt. **A response is boun
 slowest part** — optimising one of two caps the achievable gain. The next round either
 promotes `reason` too or rolls the whole endpoint into one precomputed result.
 
+---
+
+## Tuning round 2 — finish both queries (2026-07-21, later)
+
+**Result: the endpoint moved ~7× (≈148 ms → ≈21 ms warm), because BOTH queries were made
+index-only — not just one.** This is the concrete payoff of "bounded by its slowest part."
+
+Two more hot keys promoted to stored generated columns: `reason` (text) and `passed`
+(boolean — cast at generation, so the value not the `'true'/'false'` text is stored/indexed).
+Two partial indexes, both `WHERE type = 'ConfrontationAttempted'`:
+
+| Index | Serves | Why the column order |
+| --- | --- | --- |
+| `events_confrontation_reason_idx (passed, reason)` | `byReason` (`WHERE not passed GROUP BY reason`) | leading `passed` seeks the failed rows; `reason` rides along for the group |
+| `events_confrontation_cols_idx (suspect, topic, passed)` | `byTopic` (adds `passed` for `passes`/`pass_rate`) | `(suspect, topic)` first keeps the stream ordered for GROUP BY; `passed` trails |
+
+Reproduced, warm-to-warm, `EXPLAIN (ANALYZE, BUFFERS)`:
+
+| Query | Before | After |
+| --- | --- | --- |
+| `byReason` | Bitmap Heap Scan, HashAggregate, **31,106 buffers, ~91 ms** | **Index Only Scan, GroupAggregate, 85 buffers, ~7 ms** |
+| `byTopic`  | Parallel Bitmap Heap Scan, HashAggregate, **31,345 buffers, ~59 ms** | **Parallel Index Only Scan, GroupAggregate, 118 buffers, ~14 ms** |
+
+Both went `Heap Fetches: 0` and `HashAggregate → GroupAggregate` (the index supplies sorted
+input, so no hash table). ⚠️ **The read side must reference the generated columns** (`passed`,
+`reason`), not `data->>'…'`, or the planner won't use these indexes — updated in
+`confrontations.ts`.
+
+⚠️ **VACUUM gotcha, observed live.** Adding a `STORED` column **rewrites the table**, which
+resets the visibility map — so immediately after the push `byReason` was *still* a Bitmap Heap
+Scan (the planner declines index-only while the VM is cold). `VACUUM ANALYZE events` flipped it
+to the Index Only Scan above. (Contrast round 1 step 3, where `relallvisible` happened to be
+100% already — a rewrite is exactly when it is not.)
+
+**Design tradeoff, restated:** `events` is an analytics table — read-hot, write-tolerant (batched
+telemetry ingest) — so materialising these keys is justified. A field that were write-hot and
+read-rarely would not clear that bar; leave it in `data`. `/stats/friction` (filter matches ~99%
+of rows — no index can help) remains the case for a precomputed **rollup**, not more columns.
+
 ### ⚠️ Migration cost, if this ever goes to RDS
 
 `ADD COLUMN … GENERATED … STORED` **rewrites the table** and holds an `ACCESS EXCLUSIVE`
@@ -376,3 +425,221 @@ Two extra stored columns widen every row, and `events_confrontation_cols_idx` is
 structure to maintain on every insert — **every index is a tax on writes**. The partial
 predicate keeps that tax proportional: 928 kB covering 13% of rows, not 62 MB covering all
 of them.
+
+---
+
+## Tuning round 3 — the friction rollup, when indexes cannot help (2026-07-21, later)
+
+**Result: `/stats/friction.afterFailure` 776 ms / ~62k buffers -> ~0.3 ms / 9 buffers (~2,700x),
+via an incremental precomputed rollup. The read is a Seq Scan over 239 rows -- correct, because
+on a tiny table a seq scan wins (round-1 step 1, restated).**
+
+### Why no index can help (the categorical difference)
+
+`afterFailure` is a `LEAD` **window function** over the whole `(session_id, seq)` stream. The plan
+reads all 1,000,092 rows through the PK into a `WindowAgg`, even though only ~97k are failures --
+because each failure's answer lives in a DIFFERENT row (the next event). An index narrows
+**row-local** work (filters, GROUP BY -- the answer is inside the row). It cannot narrow a
+computation that depends on row **adjacency/ordering**: `LEAD`, `LAG`, `ROW_NUMBER`, running
+totals. The `WHERE not passed` that made `byReason` index-only is still here, but it runs *after*
+the window (pushing it down would make `LEAD` see "next failure", not "next event").
+
+### Why precomputation is the right tool
+
+`events` is append-only + immutable and the window is **partitioned by `session_id`**. Each launch
+mints a fresh `session_id`, so once a session stops receiving events its partition is **frozen** --
+no future event changes any of its `LEAD` results. The historical answer never changes;
+recomputing it on every dashboard load is waste. Precompute per session, once.
+
+### The three pieces (`stats/frictionRollup.ts`; tables in `schema.ts`)
+
+```
+friction_rollup          -- (suspect, topic, next_action) -> count, gap_count, sum_gap_seconds
+friction_sessions_done   -- session_id guard: fold each settled session EXACTLY once
+refreshFrictionRollup()  -- fold newly-settled sessions, in ONE transaction
+```
+
+**Two load-bearing rules:**
+
+1. **Decomposable aggregates only.** Store `count`, `gap_count`, `sum_gap_seconds`; derive
+   `avg = sum/gap_count` at read. You cannot average averages, and `AVG` ignores NULL gaps
+   (`session_end` has none) so its denominator is `gap_count` (non-null), not `count`. Percentiles
+   / `COUNT DISTINCT` do NOT decompose -- a rollup can't do them without approximation.
+2. **Watermark with allowed lateness.** A session is *settled* once its newest event was received
+   `> lateness` ago (default 10 min > worst-case shipper lag). The pipeline is **asynchronous**, so
+   "no events yet" != "no more events ever" -- even an explicit SessionEnded event (a good future
+   optimisation) is just another event under the same lag, so the time-based watermark is
+   unavoidable, not a workaround. The rollup **deliberately excludes the currently-active session**
+   (its buckets would be provisional).
+
+**Correctness chain:** settled -> frozen partition -> final `LEAD` -> folded in exactly once (the
+done-guard) -> `friction_rollup` == the full query restricted to settled sessions.
+
+### Proven, not asserted
+
+- **Correctness:** symmetric `EXCEPT` diff of rollup-vs-live = **0 / 0** (identical output).
+- **Idempotency:** first run folded 9,255 sessions in 3.1 s; second run folded **0** in 103 ms,
+  buckets unchanged. Without the done-guard the second run re-adds all 9,255 and doubles every count.
+- **First run pays the full cost once** (3.1 s); steady state is O(new settled sessions).
+
+---
+
+## Tuning round 4 — `attemptsToPass`, and why GRAIN is the real decision (2026-07-22)
+
+**Result: `/stats/friction.attemptsToPass` ~324 ms / ~31.5k buffers -> ~11.5 ms / 631 buffers
+(~28x). With both queries rolled up, the ENDPOINT goes ~1,100 ms -> ~14 ms (~78x)** — the
+"a response is bounded by its slowest part" lesson landing a second time: round 3 fixed one of the
+two queries and the endpoint stayed pinned at ~330 ms until this one moved.
+
+### The same problem, a different grain
+
+`attemptsToPass` is a `ROW_NUMBER` window — identical neighbour-dependence, identical "no index can
+help" argument as round 3. What is NOT identical is what we store. The original query has a
+`per_session` CTE (one row per `session_id, suspect, topic`) that the final `SELECT` then collapses.
+Either level can be the rollup:
+
+| | **A — collapsed** `(suspect, topic)` | **B — per-session** `(session_id, suspect, topic)` ✅ chosen |
+| --- | --- | --- |
+| Rows stored | 35 | 72,255 |
+| Read | direct select, ~0.3 ms | `GROUP BY`, ~11.5 ms |
+| Fold | additive (`count + excluded.count`) | plain insert, `ON CONFLICT DO NOTHING` |
+| Double-fold guard | needs `friction_sessions_done` | **free** — natural key collides with itself |
+| median / p90 / histogram | **impossible, permanently** | computable at read |
+| `max` | stored; repairable only by full recompute | recomputed from retained rows |
+
+**Why B.** Three reasons, in ascending order of importance:
+
+1. **Idempotent by construction.** `(session_id, suspect, topic)` is a real natural key, so a repeat
+   fold collides and `DO NOTHING` absorbs it — the same mechanism `events` ingest uses. An additive
+   fold cannot self-guard: "add 3 to this bucket" is indistinguishable from "this bucket is already
+   right". (The watermark is still load-bearing — an unsettled session would insert a *provisional*
+   `attempts_to_pass`, and `DO NOTHING` would then cement it forever.)
+2. **`max` is associative but NOT invertible.** `sum`/`count` can be *subtracted*, so a
+   wrongly-folded session can be repaired surgically in place. You cannot un-`max`: a stored max
+   doesn't know what the runner-up was, so its only repair is a full recompute from `events` — the
+   exact work the rollup exists to avoid. This is not hypothetical here: 1M synthetic
+   (`env='synthetic'`) rows share the table and `/stats/*` does not filter `env`.
+3. **Non-decomposable aggregates stay possible.** median-of-medians != median, and unlike `avg`
+   there is no set of stored summaries that recovers it; same for percentiles and `COUNT DISTINCT`.
+   They are computable under B only because the per-session values survive.
+
+**The general rule this yields — an upgrade to round 3's rule 1:** "store decomposable aggregates"
+is really a special case of **never collapse past the grain that retains an aggregate's inputs.**
+Coarser is smaller and faster; finer answers questions you have not thought of yet. And the
+asymmetry decides ties: a fine grain can always be collapsed later, a collapsed one can never be
+un-collapsed.
+
+**The cost, stated honestly:** B is 40x slower to read than A would be (11.5 ms vs ~0.3 ms) and
+stores 2,000x more rows. On a 324 ms query that is a good trade; if the table grows 100x it is worth
+revisiting.
+
+### Read plan (and why it is correct)
+
+`Seq Scan (72,255 rows, 631 buffers) -> HashAggregate -> Sort`, ~11.5 ms. **No index would help**:
+the query has no `WHERE`, so it needs 100% of the rows, and an index scan over all of them is
+strictly worse than physical order. Note the reason is **selectivity, not adjacency** — there is no
+window function in the read query at all any more; that work moved to fold time.
+
+### Implementation
+
+`friction_attempts_rollup` (schema.ts) is folded inside `refreshFrictionRollup()` from the **same
+`_settled` set in the same transaction** as `friction_rollup`, so the two can never disagree about
+which sessions they cover and one done-guard row covers both. `attempts_to_pass` is **nullable —
+NULL means "never solved in this session"**; `count(attempts_to_pass)` at read therefore counts only
+solving sessions, and `solved=0 with attempts>0` remains the unpassable-content signal (doc 10 Q1.6).
+Storing `0` would destroy that distinction.
+
+### Proven, not asserted
+
+- **`attemptsToPass` correctness:** symmetric `EXCEPT` rollup-vs-live = **0 / 0**.
+- **Fold determinism (bonus):** the guard + both rollups were truncated and rebuilt from `events`
+  from scratch; `friction_rollup` came back **0 / 0** against its previously-verified state. So
+  "recompute from source" is always available as a repair.
+- **Idempotency:** re-run folded **0** sessions; all row counts and totals unchanged.
+- Full backfill of both rollups: 9,255 sessions in **1.46 s**, one transaction.
+
+### Deferred
+
+1. ~~**Scheduling** `refreshFrictionRollup()`.~~ **DONE 2026-07-22** -> see "Scheduling the fold"
+   below.
+2. **Enhancement:** emit a `SessionEnded` event to settle clean exits sooner (still needs the
+   watermark for crashes/alt-F4 and shipper lateness).
+3. ~~**Analytics question (doc 10):** cross-session comeback.~~ **RESOLVED 2026-07-22 -> doc 10
+   Q1.7.** Measured **set-based** (an install has both an unsolved and a solved session for a
+   topic), NOT as an `install_id`-partitioned window. The ordered version would break the rollup
+   correctness argument above -- partition by `install_id` and a new session can change a prior
+   partition's answer, so no partition is ever frozen and the incremental fold is invalid. The
+   set-based version aggregates **at read time over `friction_attempts_rollup`**, whose rows are
+   per-session and individually frozen, so it costs the rollup nothing. It is answerable only
+   because round 4 declined to collapse the session dimension. **`install_id` added to
+   `friction_attempts_rollup` + back-folded 2026-07-22** (values unchanged, `EXCEPT` 0/0, 0
+   mismatches vs `events`); the query is proven, only the dashboard view remains.
+
+---
+
+## Scheduling the fold (2026-07-22)
+
+A precomputed rollup is only as good as whatever keeps it current. `k8s/cronjob-friction-rollup.yaml`
+runs `node dist/jobs/refreshFriction.js` **every 5 minutes**, using the same image as the API.
+
+### Why a CronJob, not `setInterval` and not `pg_cron`
+
+| | `setInterval` in the API | `pg_cron` in RDS | **k8s CronJob** ✅ |
+| --- | --- | --- | --- |
+| Runs the existing TypeScript fold | ✅ | ❌ reimplement in plpgsql | ✅ same image |
+| Survives an API deploy | ❌ restarts with the pod | ✅ | ✅ |
+| With N API replicas | **N schedulers** | 1 | 1 |
+| Failure visibility | a log line | `cron.job_run_details` | `kubectl get jobs` + backoff |
+
+The decisive argument against `pg_cron` is **not** the RDS parameter-group reboot. The fold's
+`CASE` ladder has a documented sync requirement with `stats/friction.ts`; porting it to plpgsql
+moves that logic where `tsc`, CI and code review cannot see it, and makes migrations the deploy
+path. **Logic in two languages is a worse problem than scheduling in two places.**
+
+### Cadence is constrained by the watermark, not free choice
+
+End-to-end staleness = **allowed lateness (10 min) + up to one interval**. A session that goes
+quiet at 12:00 settles at 12:10 and appears by ~12:15. Running faster than the watermark buys
+nothing — nothing can settle sooner than it allows.
+
+⚠️ **Freshness regression, stated honestly.** Before the rollup, `/stats/friction` read `events`
+live, so a session showed up *immediately*. It now lags ~10–15 min and the **currently-active
+session is excluded by design**. For a mod-developer tool whose main use is "I just played, what
+did that look like?", that is a real downgrade traded for the 78x. The proper fix is a **hybrid
+read** — serve settled sessions from the rollup and `UNION` the live query restricted to the few
+unsettled ones — not a faster cron. Deferred, but this is the reason not to slow the cadence down.
+
+### Concurrency: two rollups, two different reasons for safety
+
+`frictionRollup.ts` takes a **transaction-scoped advisory lock** (`pg_advisory_xact_lock`) —
+an application-defined mutex released automatically on commit *or* rollback. It locks nothing
+physical; the key just has to be agreed by every caller.
+
+It is a *tidiness* fix, not a correctness one, and the distinction matters:
+
+- **`friction_attempts_rollup` is safe on its own merits** — natural key + `ON CONFLICT DO NOTHING`.
+- **`friction_rollup` is not.** Two concurrent folds BOTH add into it (`count + excluded.count`
+  on an already-committed row cannot tell "already folded" from "fold me"). What undoes the
+  double-count is the **done-guard insert raising a unique violation and rolling the whole
+  single transaction back**.
+
+⚠️ **Therefore the missing `ON CONFLICT` on the done-guard insert is load-bearing, not an
+oversight.** Adding `DO NOTHING` there looks like a defensive tidy-up and would silently corrupt
+the rollup: the doubling would commit, every bucket permanently inflated, no error raised, numbers
+that still look plausible. There is a `⚠️ DO NOT ADD` comment in the code saying so.
+
+The advisory lock's contribution is to make the second run **wait and then do nothing** rather
+than crash — quiet instead of a unique-violation stack trace plus a wasted fold.
+
+**Proven:** three concurrent folds against a truncated rollup — one folded 9,255 sessions, the
+other two blocked for its duration then folded 0; symmetric `EXCEPT` vs. the pre-truncate state
+= **0 / 0**, no errors.
+
+### The runner lives in `src/`, not `scripts/` — deliberately
+
+The Dockerfile's runtime stage copies **only `dist/`**. The original `scripts/refresh-friction.mjs`
+was therefore absent from the image, and the CronJob would have died with `MODULE_NOT_FOUND` on
+every tick — caught by reading the Dockerfile rather than trusting the manifest. It is now
+`src/jobs/refreshFriction.ts`, compiled into `dist/`, so local dev and the cluster run the
+identical artifact and the entrypoint is type-checked. It exits non-zero on failure so the Job is
+marked FAILED and surfaces in `kubectl get jobs` instead of hiding in a pod log.

@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "refresh-friction": "node dist/jobs/refreshFriction.js",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:push": "drizzle-kit push",

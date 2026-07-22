@@ -526,3 +526,311 @@ change ONE thing; when the result surprises you, **shrink the query until the be
 changes** (`count(*)` vs selecting the expression isolated the real cause in one step); and
 force the planner's hand (`enable_bitmapscan = off`) as a *diagnostic* to see what the
 alternative would have cost — confirming the planner was right, rather than assuming it wrong.
+
+---
+
+## 2026-07-21 (later) — RE-TEACH round 1: selectivity, correlation, scan types
+
+Re-teach of the material above, run under `.claude/skills/teach/SKILL.md`. **No multiple
+choice.** Every command was preceded by a prediction; the learner drove psql directly in
+their own terminal.
+
+**Method change that mattered:** shrank the example. Started on a **5-row** table, moved to
+a purpose-built 1M-row `big` / `big_shuf` pair with exactly one variable between them —
+rather than the real `events` table, where several effects are tangled together.
+
+**Assessments and results:**
+
+| # | Type | Question | Result |
+| --- | --- | --- | --- |
+| 1 | Prediction | Will a 5-row table use its index? | ✅ correct, with mechanism unprompted ("touching two things, seq scan is cheaper") |
+| 2 | Prediction | 1M rows: index for `n=42` (1 row) vs `n>0` (999,998)? | ✅ both correct; **described selectivity before being given the word** |
+| 3 | Estimate | At what % of the table does the index stop winning? | "50%" — came out *right on `big`*, but for the wrong reason (see below) |
+| 4 | Prediction | Shuffle physical order — where does the flip move? | ❌ **"75%, then seq"** — wrong direction. The productive error of the session. |
+| 5 | Explain-back | Why is a forced bitmap scan *worse* on the correlated table? | ✅ correct (missed only the cost side: materialization + recheck) |
+| 6 | Transfer | Which `events` column has correlation ≈ 1, and what does that buy? | ✅ `received_at`; needed one correction — it makes *range* queries cheap, not selects generally |
+
+**Diagnosed gap → the real lesson.** Q3/Q4 exposed that "index vs seq" was understood as a
+function of **selectivity alone**. The `big` table was accidentally a best case: built with
+`generate_series`, so physical order matched index order (`correlation` ≈ 1.0) and index
+scans stayed optimal past 50% — which *validated a wrong model*. Shuffling the same rows
+(`ORDER BY random()`, correlation ≈ 0) collapsed plain `Index Scan` from >50% to **below
+0.1%**, and the same 0.1% query went from **cost 40 → 2,787 (70×)** with identical data,
+index, and result set.
+
+That reframed the index's value: **finding the rows was never the expensive part** (the
+Bitmap Index Scan cost 20 of that 2,787) — avoiding **random heap I/O** is. `Bitmap Heap Scan`
+then arrived as the answer to precisely the problem the learner had already named in Q1:
+collect row locations first, then sweep the heap in physical page order once.
+
+**Order of access patterns established:** Index Scan (needs correlation) → Bitmap (batches
+hops into page order, pays `Recheck Cond`) → Seq Scan (skip the index entirely).
+
+**Still to re-cover:** Index Only Scan + the visibility map; `Buffers: hit` vs `read`; warm vs
+cold measurement; ⭐ the core finding (an expression index can filter/order/count but cannot
+*return* the expression's value); stored generated columns + partial index; why the endpoint
+gained 2× against the query's 13×.
+
+**Noted for later:** correlation on an append-only event table is the seed of **time-based
+partitioning** — flagged, deliberately not taught yet.
+
+### 2026-07-21 (later, cont.) — RE-TEACH round 2: Index Only Scan, visibility map, VACUUM
+
+Continued straight on from round 1, same method (predict → run → explain-back, learner driving psql).
+
+**Concepts:** Index Only Scan as a *fourth*, cheapest access pattern (never touches the heap);
+covering — index-only requires every SELECTed column to live in the index; the **visibility
+map** (per-page "all-visible" bits, maintained by **VACUUM**) as what lets an index-only scan
+skip the heap; `Heap Fetches` as the tell; **autovacuum** as a background, asynchronous process
+decoupled from queries.
+
+**Assessments:**
+- Prediction: what changes between `SELECT *` and `SELECT n` on the same filter? → after one
+  nudge off "selectivity" (the WHERE was identical), got it cleanly: "it never looks in the
+  heap because n is already in the index." ✅
+- Prediction: will an Index Only Scan still show nonzero `Heap Fetches`, and why? → guessed the
+  *shape* right ("there's a stored thing that lets it skip the heap") but two details off:
+  thought it was lazily cached on first read (it's maintained ahead of time by VACUUM) and
+  per-row (it's per-page). Corrected.
+- ⭐ **Productive surprise #2:** predicted `Heap Fetches` ≈ full set on the fresh table; it came
+  back **0** *before* the manual VACUUM. Cause: **autovacuum had already fired in the
+  background** (`last_autovacuum` populated in `pg_stat_user_tables`) — the experiment was
+  contaminated by the very process under study. Re-staged on a fresh table queried in the same
+  breath: **Bitmap Heap Scan, Heap Blocks=929, 52 ms → (VACUUM) → Index Only Scan, Heap
+  Fetches: 0, 0.135 ms — ~385× from one VACUUM.** The planner itself declined index-only while
+  the VM was cold, which taught that VM state is an *input to planning*, not just runtime.
+- Page-count prediction: 1,000 scattered rows (correlation ≈ 0) → ~1,000 distinct pages.
+  Actual `Heap Blocks: exact=929`. ✅ magnitude, not just direction.
+
+**Explain-back (transfer):** "a friend's append-only events table has a slow SELECT" — produced
+a correct decision tree unprompted: inspect schema, index the timestamp, tiny→seq, matches-most
+→seq, low-correlation+few-rows→bitmap, correlated+ordered→index.
+
+**One diagnosed conflation, corrected:** fused "correlated" with "index-only." Split them —
+**correlation** decides whether heap hops are cheap (plain Index Scan); the **SELECT list**
+decides whether you hop at all (Index Only Scan). Independent knobs; a query can have either
+without the other. This is the exact hinge for the next concept (the ⭐ core finding: an
+expression index can filter/order/count but cannot *return* the expression's value).
+
+**Contrast with the 2026-07-21 (earlier) 6/6 that the learner "barely followed":** this time
+every claim was earned by a prediction the learner committed to before seeing output, two of
+which were wrong in instructive ways. The wrong predictions are the evidence the model is real.
+
+### 2026-07-21 (later, cont.) — RE-TEACH round 3: the ⭐ core finding (expression index vs generated column)
+
+Grounded on a 200k-row toy (`ev`) with BOTH an expression index `((data->>'grp'))` and a
+generated `grp text GENERATED ALWAYS AS (data->>'grp') STORED` + plain index, VM warmed.
+
+**Measured on this Postgres 16 (all four, same filter `= 'g7'`, ~2000 rows):**
+
+| Setup | Query | Plan | Heap access | Time |
+| --- | --- | --- | --- | --- |
+| Expression index | count(*) | Bitmap Heap Scan | Heap Blocks 1470 | 1.4 ms |
+| Expression index | return value | Bitmap Heap Scan | Heap Blocks 1470 | 1.5 ms |
+| Generated column | count(*) | **Index Only Scan** | **Heap Fetches 0** | 0.17 ms |
+| Generated column | return value | **Index Only Scan** | **Heap Fetches 0** | 0.14 ms |
+
+**⚠️ HONEST CORRECTION to the 2026-07-21 (earlier) notes.** Those recorded the finding as
+"an expression index can filter/order/COUNT but cannot RETURN the expression's value." On this
+PG16 the split is sharper: **an expression index gets NO index-only scan at all** — not even
+for `count(*)` — and forcing the planner (`enable_bitmapscan=off; enable_seqscan=off`) made it
+choose a plain heap-touching Index Scan rather than index-only. The expression index is still
+used to *filter* (the Bitmap Index Scan step), but never index-only. Materializing the same
+expression into a **stored generated column** flips BOTH count and return to Index Only Scan,
+zero heap fetches, ~10×. Same conclusion the earlier session reached (use generated columns),
+cleaner mechanism. This is why `events.suspect`/`events.topic` are generated columns, not a
+bare expression index.
+
+**Assessments:**
+- Prediction (pre-run): "both index-only; count 0 fetches, return full fetches." ❌ — assumed
+  the expression index behaves like a real-column index. Reality: expression index isn't
+  index-only for EITHER. The productive error that motivated the whole reveal.
+- Explain-back + transfer: "teammate wants a bare index on `data->>'status'`" → correctly said
+  it'll still do heap fetches / bitmap, fix is a generated stored column + plain index, and
+  **spontaneously re-applied it to a new example** (`evidence_type` in the blob). ✅ Strong.
+- Added (not yet assessed): the WRITE-COST tradeoff — generated columns cost storage + write
+  time, so promote a JSONB key to a generated column only when it's HOT (design docs/06 §2).
+
+**Measurement discipline modelled live (three contaminated runs, each surfaced honestly):**
+`VACUUM` silently failed inside psql's implicit txn block ("cannot run inside a transaction
+block") → cold VM; `enable_bitmapscan=off` used as a diagnostic to see the forced alternative;
+autovacuum (round 2) had pre-warmed a table we meant to measure cold. Each contamination was
+named and re-staged rather than narrated past — the exact opposite of the original session.
+
+**Still not re-covered (next):** `Buffers: hit` vs `read`; warm/cold timing on the REAL
+confrontation aggregate; why the optimized endpoint gained ~2× against the query's ~13×
+(second unoptimised query; a response is bounded by its slowest part).
+
+### 2026-07-21 (later, cont.) — RE-TEACH round 4: Buffers, warm/cold, endpoint-bounded-by-slowest
+
+Grounded on the REAL `/stats/confrontations` endpoint (`api/src/stats/confrontations.ts`),
+both queries, `EXPLAIN (ANALYZE, BUFFERS)`.
+
+**Concepts:** `shared hit` (in shared_buffers) vs `shared read` (had to read in); buffers count
+= a **stable measure of work (blocks touched)**, time = noisy/cache-dependent — hence measure
+warm & repeated, warm-vs-warm; the **OS page cache as a second layer below shared_buffers**
+(`read` can stay high on a warm run yet be fast — "read" ≠ "slow disk", only "not in Postgres's
+own cache"); a response is **bounded by its slowest part** (two sequential `await`ed queries →
+~57ms + ~90ms).
+
+**Live numbers:** byTopic cold `read=31106` 1164 ms → warm 57 ms (buffers ~unchanged); byReason
+warm ~90 ms, `read=31106`. Endpoint ≈ sum. So optimizing byTopic alone caps the endpoint win at
+byReason's floor — the concrete "query 13× → endpoint ~2×" mechanism.
+
+**Assessments:**
+- Prediction (cold vs warm read count): explained the buffer cache correctly in own words
+  ("it already read it the first time, so the second is faster thanks to the buffer"). ✅
+- Prediction + transfer (why is byReason slow, what's the fix): fix correct (generated column +
+  plain index on `reason`), tradeoff-exists correct, storage-cost-unavoidable correct.
+- ❌→✅ **One inverted-logic error, corrected:** conflated READ frequency with WRITE frequency —
+  claimed "hitting it more often may make it not worth it." Straightened: read-freq feeds the
+  BENEFIT, write-freq feeds the COST; they're independent clocks on opposite sides. "Hot" =
+  read-hot. Applied to events (analytics table, read-hot, write-tolerant) → materializing
+  `reason` IS justified.
+
+**⚠️ TWO stale claims in the codebase surfaced by live measurement — real TODOs:**
+1. `confrontations.ts` lines 22–26 comment repeats the OLD core-finding framing ("cannot RETURN
+   an expression's value from an index-only scan") and claims "29,670 buffers -> 116, ~90ms ->
+   ~7ms." **Does not reproduce:** byTopic currently does a Parallel Bitmap Heap Scan reading
+   31,106 blocks (57 ms warm), NOT an ~116-buffer index-only scan — because it needs
+   `data->>'passed'` (passes/pass_rate), which lives in the HEAP, not in
+   `events_confrontation_cols_idx (suspect, topic)`. The recorded 13× is stale/aspirational.
+2. `byReason` is un-optimized (groups on JSONB `data->>'reason'`, no generated column/index).
+
+**Project TODOs that fell out of the lesson (for tonight):** (a) fix the misleading comment in
+confrontations.ts to the corrected mechanism; (b) decide/execute promoting `passed` to a
+generated column so byTopic can approach index-only; (c) promote `reason` likewise for byReason.
+
+### 2026-07-21 (later, cont.) — APPLIED IT: the re-teach's TODOs, shipped
+
+The re-teach surfaced stale/false claims and two un-optimised queries; the learner then drove
+fixing all three, smallest->biggest, choosing designs and predicting each measurement.
+
+1. **Corrected the false mechanism** in confrontations.ts, schema.ts, and design docs/06 (the
+   "expression index can COUNT but not RETURN" framing -> "expression index gets NO index-only
+   scan at all; a stored generated column does"). Removed brittle buffer numbers that had
+   already gone stale once.
+2. **Promoted `reason` + `passed`** to stored generated columns (Option B, learner's call:
+   reusable across both queries beats a one-off baked-in predicate BECAUSE a second consumer was
+   known to be coming). Index (passed, reason) -> byReason 31,106->85 buffers, ~91->~7 ms,
+   Bitmap Heap->Index Only, Hash->GroupAggregate.
+3. **Extended the byTopic index to (suspect, topic, passed)** -> byTopic 31,345->118 buffers,
+   ~59->~14 ms, fully index-only. Read side switched to reference the columns (not data->>).
+   **Endpoint ~148 ms -> ~21 ms (~7x)** -- the concrete "bounded by its slowest part" payoff:
+   round 1's one-query fix capped at 2x; fixing both moved it.
+
+**Assessment quality (all prediction/explain-back, learner driving):** correctly diagnosed the
+post-push Bitmap-Heap-Scan as a cold-VM-after-rewrite (recall from round 2) and named VACUUM as
+the fix AND warm-to-warm as the measurement discipline -- unprompted. Chose Option B with correct
+read-vs-write-frequency reasoning, and spontaneously raised the read-hot+write-hot case,
+re-deriving the async-rollup answer (exactly the queued /stats/friction plan).
+
+**Mistakes made & caught (mine):** backticks inside a sql template literal broke the TS build;
+drizzle-kit push needs a TTY and tried to drop the teaching toy tables (dropped them first).
+npm run build surfaced the first immediately -- the "verify, don't assume" habit paying off.
+
+### 2026-07-21 (later, cont.) — Friction rollup: precomputation when indexes can't help
+
+Continued the same day into the resume's still-false bullet (precomputation/materialized rollups),
+same method: teach the design before code, prediction/explain-back throughout, learner chose the
+design fork.
+
+**Concepts:** row-local vs row-relational work (why `LEAD`/`ROW_NUMBER` can't be index-narrowed --
+each output depends on a NEIGHBOUR row, not a seekable value); append-only + per-session-partition
+immutability as what makes incremental rollup CORRECT; decomposable aggregates (store sum+count,
+derive avg; AVG ignores NULLs so its denominator differs from count; percentiles/COUNT DISTINCT
+don't decompose); **watermark with allowed lateness** (named the stream-processing term for the
+learner's own instinct); the done-guard as exactly-once/idempotency one layer up from ON CONFLICT.
+
+**Assessments:**
+- Transfer (why can't an index help here?): partially right ("failure isn't a specific thing to
+  index") -- corrected: we DID index failure (`passed`); the real reason is neighbour-dependence.
+- Explain-back (the wasteful thing): nailed -- "we rebuild the whole thing every load when it
+  doesn't change unless there's something new."
+- ❌ **Key misconception, corrected:** thought a NEW session could change a PRIOR session's friction
+  ("they come back and solve it"). It can't -- the window partitions by `session_id` and each launch
+  mints a new one, so `LEAD` never crosses sessions. This was THE hinge of the whole design; worth
+  the time it took. (The learner's cross-session point survives as a real doc-10 analytics question,
+  parked.)
+- Design fork: chose Option B (incremental table) over a materialized view, with correct reasoning
+  (reusable/deeper, matches the resume bullet).
+- Good architectural instinct raised unprompted: "just emit a SessionEnded event." Addressed
+  seriously -- it's a valid v2 optimisation but not a replacement, because crashes/alt-F4 emit
+  nothing AND async shipping means "game done" != "we have all events". Taught: in an async pipeline
+  you can't KNOW you've seen everything, only wait a bounded time -> the watermark is unavoidable.
+- Honestly flagged not knowing what `LEAD` does after reasoning about it for a while -- taught it
+  concretely ("look at the next row"); should have checked this earlier.
+
+**Built + PROVEN (not asserted):** afterFailure rollup end-to-end -- correctness by symmetric EXCEPT
+diff = 0/0 vs the live query; idempotency by a 2nd run folding 0 sessions with buckets unchanged;
+776 ms -> ~0.3 ms (~2,700x). The rollup read is a Seq Scan on 239 rows -- and that is CORRECT,
+closing the loop with the night's very first `tiny`-table lesson.
+
+**Deferred:** attemptsToPass rollup (now the endpoint's tall pole, ~324 ms -- same pattern),
+scheduling the fold, the SessionEnded enhancement, the cross-session analytics question.
+
+**Process note (learner request, 2026-07-21):** wants periodic RECALL REFRESHERS -- short retrieval
+checks on material from PAST sessions, not just the current one. Space them out; spaced retrieval is
+exactly what the false-6/6 episode showed was missing. Good candidates to spiral back on:
+selectivity, correlation, the four scan types, index-only + visibility map/VACUUM, decomposable
+aggregates, and the watermark/immutability argument.
+
+### 2026-07-22 — RECALL REFRESHER (spaced retrieval) + the attemptsToPass rollup
+
+Learner opened by requesting the refresher they'd asked for on 07-21: scan types, rollup,
+"materialize", VACUUM, visibility map vs bitmap. Delivered as a written refresher (as asked) with
+a 4-question retrieval set appended — no multiple choice.
+
+**Refresher content:** the four scan types framed by one question (*how many heap pages must I
+touch?*), including that Seq Scan is not a failure mode; visibility map vs bitmap side by side
+(persistent/on-disk/VACUUM-maintained/MVCC vs ephemeral/in-memory/per-execution/I-O-ordering);
+VACUUM's four jobs with ANALYZE separated out; **"materialize" disambiguated into three senses**
+(materialize a value = stored generated column; materialized view; the `Materialize` plan node) —
+that overload was the likely source of the fog; rollup as incremental precomputation and why
+matview REFRESH was rejected.
+
+**Retrieval results:**
+- ✅ Q1 (Index Only Scan with nonzero Heap Fetches): diagnosed cold VM + named VACUUM, confident
+  and unprompted. This is now RETAINED across sessions, not just recognised in the moment.
+- ✅ Q4 (bitmap): "how are these rows organized amongst these different pages" — essentially right.
+- ⚠️ Q4 (VM): said "can we currently see this page". Corrected: visibility is per-SNAPSHOT, which
+  a persistent shared bit cannot encode; the VM asks *is every row version on this page visible to
+  EVERY transaction*. Reader-independent, all-or-nothing, conservative.
+- ❌ Q2 (why sum+count not avg): had the RULE verbatim, could not walk the mechanism, and said so.
+  Honest self-report — the useful thing to say. Re-taught by shrinking to 4 numbers (A: 10/20/30,
+  B: 100 -> truth 40s, avg-of-avgs 60s) and naming the missing idea: **an average has discarded its
+  WEIGHT, and count IS the weight**; once discarded it cannot be re-weighted. Added the NULL half
+  (`AVG` ignores NULLs -> denominator is gap_count, not count).
+- ❌ Q3 (median): conflated median with COUNT DISTINCT. Corrected — same list, unrelated
+  operations; median-of-medians (2 vs 51 on the same tiny example) and, crucially, **no extra
+  column rescues it**, unlike avg. But the learner's closing instinct ("you may be able to derive
+  median during the query itself") was the right thread and got promoted into the day's main idea.
+
+**Design fork (the real lesson): GRAIN.** Reframed "can I roll this up?" as "**what grain do I roll
+up to**", rule: *never collapse past the grain that retains an aggregate's inputs* — a
+generalisation of round 3's decomposable-aggregates rule. Learner chose per-session (Option B).
+
+**Transfer check on `max`:** asked why `max` is the fragile one given it IS decomposable. Learner
+answered with the general grain point (correct, but the point already made) and missed the specific
+property. Taught: **`sum`/`count` are invertible, `max` is not** — a mis-folded session can be
+subtracted out of a sum, but a stored max can only be repaired by full recompute. Grounded in a
+real hazard here (1M `env='synthetic'` rows in the same table, `/stats/*` doesn't filter env).
+
+**Prediction before measuring the new read plan:** ✅ predicted Seq Scan, ✅ said an index on
+`(suspect, topic)` would not help. ❌ **Mechanism slip worth watching**: justified it with *"it's
+gotta look at almost all the events to know what came after"* — but the read query has NO window
+function any more; that work moved to fold time. The Seq Scan is justified by SELECTIVITY alone
+(no WHERE -> 100% of rows). **Right answer, mechanism borrowed from the previous slide** — the same
+shape as 07-21's "failure isn't a specific thing to index". Recurring pattern; flag it again.
+Timing prediction (~0.3 ms) was optimistic — actual 11.5 ms, because this table is 72,255 rows vs
+afterFailure's 239. That gap IS the Option B cost, and naming it was more useful than a hit.
+
+**Shipped:** `friction_attempts_rollup` + fold in the same transaction/`_settled` set as
+`friction_rollup`. attemptsToPass ~324 ms -> ~11.5 ms (~28x); **endpoint ~1,100 ms -> ~14 ms
+(~78x)** — "bounded by its slowest part" demonstrated a second time, since round 3 alone left the
+endpoint pinned at ~330 ms. Proven: symmetric EXCEPT 0/0 vs live; idempotent re-run folds 0; and a
+full truncate-and-rebuild reproduced the previously-verified `friction_rollup` 0/0, showing the
+fold is deterministic and "recompute from source" is always available as a repair.
+
+**Still not re-covered / next refresher candidates:** selectivity + correlation (why the planner
+picks Bitmap over Index Scan), `work_mem` and lossy bitmaps, GroupAggregate vs HashAggregate.
