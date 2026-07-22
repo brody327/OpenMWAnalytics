@@ -48,54 +48,22 @@ export async function friction(_req: Request, res: Response): Promise<void> {
   // NOTE session_end is *inferred*: there is no SessionEnded event, and a crash, an
   // alt-F4 and a clean quit are indistinguishable from the log. It really means
   // "last observed activity" (doc 10 §4, module 4 caveat).
+  // Read from the precomputed friction_rollup, NOT the live LEAD window. The window scans the
+  // whole (session_id, seq) stream (~776 ms, ~62k buffers) and no index can narrow it -- a
+  // window function depends on row adjacency, not any seekable value. The rollup precomputes
+  // this per settled session exactly once (see stats/frictionRollup.ts + design docs 06).
+  //
+  // avg is DERIVED here (sum/gap_count), not stored: you cannot average averages, and AVG
+  // ignores NULL gaps, so its denominator is gap_count (non-null), not count. nullif guards
+  // the session_end buckets (all gaps NULL -> avg NULL), matching the live query exactly.
   const afterFailure = await db.execute(sql`
-    with stream as (
-      select
-        session_id,
-        seq,
-        type,
-        ts,
-        data,
-        lead(type) over w as next_type,
-        lead(data) over w as next_data,
-        lead(ts)   over w as next_ts
-      from events
-      where type not in ('Heartbeat', 'SpikeStarted')
-      window w as (partition by session_id order by seq)
-    ),
-    fails as (
-      select
-        data->>'suspect' as suspect,
-        data->>'topic'   as topic,
-        case
-          when next_type is null then 'session_end'
-          when next_type = 'ConfrontationAttempted'
-               and next_data->>'suspect' = data->>'suspect'
-               and next_data->>'topic'   = data->>'topic'   then 'retried_same'
-          -- ConfrontationExited is AUTHORITATIVE where left_area was only inferred:
-          -- the player explicitly closed the panel. The completed flag separates "left
-          -- because the suspect was finished" from "gave up". Ordered BEFORE the AreaEntered
-          -- branch, since an exit is usually followed by movement anyway.
-          when next_type = 'ConfrontationExited'
-               and (next_data->>'completed')::boolean       then 'exited_solved'
-          when next_type = 'ConfrontationExited'            then 'abandoned'
-          when next_type = 'ConfrontationAttempted'         then 'switched_topic'
-          when next_type = 'AreaEntered'                    then 'left_area'
-          else 'other'
-        end as next_action,
-        extract(epoch from (next_ts - ts)) as gap_seconds
-      from stream
-      where type = 'ConfrontationAttempted'
-        and not (data->>'passed')::boolean
-    )
     select
       suspect,
       topic,
       next_action,
-      count(*)::int                                    as count,
-      round(avg(gap_seconds)::numeric, 1)::float       as avg_gap_seconds
-    from fails
-    group by suspect, topic, next_action
+      count,
+      round((sum_gap_seconds / nullif(gap_count, 0))::numeric, 1)::float as avg_gap_seconds
+    from friction_rollup
     order by count desc, suspect, topic
   `);
 

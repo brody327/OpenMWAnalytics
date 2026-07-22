@@ -425,3 +425,71 @@ Two extra stored columns widen every row, and `events_confrontation_cols_idx` is
 structure to maintain on every insert — **every index is a tax on writes**. The partial
 predicate keeps that tax proportional: 928 kB covering 13% of rows, not 62 MB covering all
 of them.
+
+---
+
+## Tuning round 3 — the friction rollup, when indexes cannot help (2026-07-21, later)
+
+**Result: `/stats/friction.afterFailure` 776 ms / ~62k buffers -> ~0.3 ms / 9 buffers (~2,700x),
+via an incremental precomputed rollup. The read is a Seq Scan over 239 rows -- correct, because
+on a tiny table a seq scan wins (round-1 step 1, restated).**
+
+### Why no index can help (the categorical difference)
+
+`afterFailure` is a `LEAD` **window function** over the whole `(session_id, seq)` stream. The plan
+reads all 1,000,092 rows through the PK into a `WindowAgg`, even though only ~97k are failures --
+because each failure's answer lives in a DIFFERENT row (the next event). An index narrows
+**row-local** work (filters, GROUP BY -- the answer is inside the row). It cannot narrow a
+computation that depends on row **adjacency/ordering**: `LEAD`, `LAG`, `ROW_NUMBER`, running
+totals. The `WHERE not passed` that made `byReason` index-only is still here, but it runs *after*
+the window (pushing it down would make `LEAD` see "next failure", not "next event").
+
+### Why precomputation is the right tool
+
+`events` is append-only + immutable and the window is **partitioned by `session_id`**. Each launch
+mints a fresh `session_id`, so once a session stops receiving events its partition is **frozen** --
+no future event changes any of its `LEAD` results. The historical answer never changes;
+recomputing it on every dashboard load is waste. Precompute per session, once.
+
+### The three pieces (`stats/frictionRollup.ts`; tables in `schema.ts`)
+
+```
+friction_rollup          -- (suspect, topic, next_action) -> count, gap_count, sum_gap_seconds
+friction_sessions_done   -- session_id guard: fold each settled session EXACTLY once
+refreshFrictionRollup()  -- fold newly-settled sessions, in ONE transaction
+```
+
+**Two load-bearing rules:**
+
+1. **Decomposable aggregates only.** Store `count`, `gap_count`, `sum_gap_seconds`; derive
+   `avg = sum/gap_count` at read. You cannot average averages, and `AVG` ignores NULL gaps
+   (`session_end` has none) so its denominator is `gap_count` (non-null), not `count`. Percentiles
+   / `COUNT DISTINCT` do NOT decompose -- a rollup can't do them without approximation.
+2. **Watermark with allowed lateness.** A session is *settled* once its newest event was received
+   `> lateness` ago (default 10 min > worst-case shipper lag). The pipeline is **asynchronous**, so
+   "no events yet" != "no more events ever" -- even an explicit SessionEnded event (a good future
+   optimisation) is just another event under the same lag, so the time-based watermark is
+   unavoidable, not a workaround. The rollup **deliberately excludes the currently-active session**
+   (its buckets would be provisional).
+
+**Correctness chain:** settled -> frozen partition -> final `LEAD` -> folded in exactly once (the
+done-guard) -> `friction_rollup` == the full query restricted to settled sessions.
+
+### Proven, not asserted
+
+- **Correctness:** symmetric `EXCEPT` diff of rollup-vs-live = **0 / 0** (identical output).
+- **Idempotency:** first run folded 9,255 sessions in 3.1 s; second run folded **0** in 103 ms,
+  buckets unchanged. Without the done-guard the second run re-adds all 9,255 and doubles every count.
+- **First run pays the full cost once** (3.1 s); steady state is O(new settled sessions).
+
+### Deferred (next session)
+
+1. **`attemptsToPass` rollup** -- the endpoint's other query is also a window (`ROW_NUMBER`, ~324 ms,
+   ~31.5k buffers); same pattern applies and it is now the endpoint's tall pole (~324 ms).
+2. **Scheduling** `refreshFrictionRollup()` -- pg_cron / Node interval / k8s CronJob (currently
+   manual via `scripts/refresh-friction.mjs`).
+3. **Enhancement:** emit a `SessionEnded` event to settle clean exits sooner (still needs the
+   watermark for crashes/alt-F4 and shipper lateness).
+4. **Analytics question (doc 10):** a cross-session comeback (fail -> quit -> return next session ->
+   win) is invisible to a session-partitioned window; whether to measure it is a design choice,
+   not a bug.

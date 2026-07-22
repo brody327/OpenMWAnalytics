@@ -6,6 +6,7 @@ import {
   smallint,
   text,
   boolean,
+  doublePrecision,
   timestamp,
   jsonb,
   primaryKey,
@@ -97,3 +98,36 @@ export const events = pgTable(
       .where(sql`type = 'ConfrontationAttempted'`),
   ],
 );
+
+// --- /stats/friction incremental rollup (design docs 06 "Tuning round 3") ---
+//
+// friction.afterFailure is a LEAD window over the WHOLE (session_id, seq) stream -- ~776 ms,
+// ~62k buffers, unfixable by any index (a window function depends on row ADJACENCY, which an
+// index cannot narrow). But the events log is append-only + immutable and the window is
+// partitioned by session_id, so a SETTLED session's result is frozen forever. We precompute
+// each settled session once and fold it in here; reads hit this table instantly.
+//
+// Decomposable aggregates only: store `count` (all failure rows) and `sum_gap_seconds` +
+// `gap_count` SEPARATELY -- avg is derived at read (sum/gap_count), because you cannot average
+// averages, and AVG ignores NULL gaps (session_end has no gap) so its denominator is the
+// non-null count, not `count`.
+export const frictionRollup = pgTable(
+  'friction_rollup',
+  {
+    suspect: text('suspect').notNull(),
+    topic: text('topic').notNull(),
+    nextAction: text('next_action').notNull(), // retried_same | abandoned | left_area | ...
+    count: integer('count').notNull(), // all failures landing in this bucket
+    gapCount: integer('gap_count').notNull(), // failures with a non-null gap (denominator for avg)
+    sumGapSeconds: doublePrecision('sum_gap_seconds').notNull(), // sum of gaps; avg = sum/gap_count
+  },
+  (t) => [primaryKey({ columns: [t.suspect, t.topic, t.nextAction] })],
+);
+
+// Idempotency guard: which sessions have already been folded into friction_rollup. Without
+// this, a second job run re-adds already-settled sessions and inflates every bucket. This is
+// ON CONFLICT DO NOTHING (ingest) one layer up -- "fold each settled session EXACTLY once".
+export const frictionSessionsDone = pgTable('friction_sessions_done', {
+  sessionId: uuid('session_id').primaryKey(),
+  rolledAt: timestamp('rolled_at', { withTimezone: true }).notNull().defaultNow(),
+});
