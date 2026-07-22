@@ -482,14 +482,88 @@ done-guard) -> `friction_rollup` == the full query restricted to settled session
   buckets unchanged. Without the done-guard the second run re-adds all 9,255 and doubles every count.
 - **First run pays the full cost once** (3.1 s); steady state is O(new settled sessions).
 
-### Deferred (next session)
+---
 
-1. **`attemptsToPass` rollup** -- the endpoint's other query is also a window (`ROW_NUMBER`, ~324 ms,
-   ~31.5k buffers); same pattern applies and it is now the endpoint's tall pole (~324 ms).
-2. **Scheduling** `refreshFrictionRollup()` -- pg_cron / Node interval / k8s CronJob (currently
+## Tuning round 4 — `attemptsToPass`, and why GRAIN is the real decision (2026-07-22)
+
+**Result: `/stats/friction.attemptsToPass` ~324 ms / ~31.5k buffers -> ~11.5 ms / 631 buffers
+(~28x). With both queries rolled up, the ENDPOINT goes ~1,100 ms -> ~14 ms (~78x)** — the
+"a response is bounded by its slowest part" lesson landing a second time: round 3 fixed one of the
+two queries and the endpoint stayed pinned at ~330 ms until this one moved.
+
+### The same problem, a different grain
+
+`attemptsToPass` is a `ROW_NUMBER` window — identical neighbour-dependence, identical "no index can
+help" argument as round 3. What is NOT identical is what we store. The original query has a
+`per_session` CTE (one row per `session_id, suspect, topic`) that the final `SELECT` then collapses.
+Either level can be the rollup:
+
+| | **A — collapsed** `(suspect, topic)` | **B — per-session** `(session_id, suspect, topic)` ✅ chosen |
+| --- | --- | --- |
+| Rows stored | 35 | 72,255 |
+| Read | direct select, ~0.3 ms | `GROUP BY`, ~11.5 ms |
+| Fold | additive (`count + excluded.count`) | plain insert, `ON CONFLICT DO NOTHING` |
+| Double-fold guard | needs `friction_sessions_done` | **free** — natural key collides with itself |
+| median / p90 / histogram | **impossible, permanently** | computable at read |
+| `max` | stored; repairable only by full recompute | recomputed from retained rows |
+
+**Why B.** Three reasons, in ascending order of importance:
+
+1. **Idempotent by construction.** `(session_id, suspect, topic)` is a real natural key, so a repeat
+   fold collides and `DO NOTHING` absorbs it — the same mechanism `events` ingest uses. An additive
+   fold cannot self-guard: "add 3 to this bucket" is indistinguishable from "this bucket is already
+   right". (The watermark is still load-bearing — an unsettled session would insert a *provisional*
+   `attempts_to_pass`, and `DO NOTHING` would then cement it forever.)
+2. **`max` is associative but NOT invertible.** `sum`/`count` can be *subtracted*, so a
+   wrongly-folded session can be repaired surgically in place. You cannot un-`max`: a stored max
+   doesn't know what the runner-up was, so its only repair is a full recompute from `events` — the
+   exact work the rollup exists to avoid. This is not hypothetical here: 1M synthetic
+   (`env='synthetic'`) rows share the table and `/stats/*` does not filter `env`.
+3. **Non-decomposable aggregates stay possible.** median-of-medians != median, and unlike `avg`
+   there is no set of stored summaries that recovers it; same for percentiles and `COUNT DISTINCT`.
+   They are computable under B only because the per-session values survive.
+
+**The general rule this yields — an upgrade to round 3's rule 1:** "store decomposable aggregates"
+is really a special case of **never collapse past the grain that retains an aggregate's inputs.**
+Coarser is smaller and faster; finer answers questions you have not thought of yet. And the
+asymmetry decides ties: a fine grain can always be collapsed later, a collapsed one can never be
+un-collapsed.
+
+**The cost, stated honestly:** B is 40x slower to read than A would be (11.5 ms vs ~0.3 ms) and
+stores 2,000x more rows. On a 324 ms query that is a good trade; if the table grows 100x it is worth
+revisiting.
+
+### Read plan (and why it is correct)
+
+`Seq Scan (72,255 rows, 631 buffers) -> HashAggregate -> Sort`, ~11.5 ms. **No index would help**:
+the query has no `WHERE`, so it needs 100% of the rows, and an index scan over all of them is
+strictly worse than physical order. Note the reason is **selectivity, not adjacency** — there is no
+window function in the read query at all any more; that work moved to fold time.
+
+### Implementation
+
+`friction_attempts_rollup` (schema.ts) is folded inside `refreshFrictionRollup()` from the **same
+`_settled` set in the same transaction** as `friction_rollup`, so the two can never disagree about
+which sessions they cover and one done-guard row covers both. `attempts_to_pass` is **nullable —
+NULL means "never solved in this session"**; `count(attempts_to_pass)` at read therefore counts only
+solving sessions, and `solved=0 with attempts>0` remains the unpassable-content signal (doc 10 Q1.6).
+Storing `0` would destroy that distinction.
+
+### Proven, not asserted
+
+- **`attemptsToPass` correctness:** symmetric `EXCEPT` rollup-vs-live = **0 / 0**.
+- **Fold determinism (bonus):** the guard + both rollups were truncated and rebuilt from `events`
+  from scratch; `friction_rollup` came back **0 / 0** against its previously-verified state. So
+  "recompute from source" is always available as a repair.
+- **Idempotency:** re-run folded **0** sessions; all row counts and totals unchanged.
+- Full backfill of both rollups: 9,255 sessions in **1.46 s**, one transaction.
+
+### Deferred
+
+1. **Scheduling** `refreshFrictionRollup()` -- pg_cron / Node interval / k8s CronJob (currently
    manual via `scripts/refresh-friction.mjs`).
-3. **Enhancement:** emit a `SessionEnded` event to settle clean exits sooner (still needs the
+2. **Enhancement:** emit a `SessionEnded` event to settle clean exits sooner (still needs the
    watermark for crashes/alt-F4 and shipper lateness).
-4. **Analytics question (doc 10):** a cross-session comeback (fail -> quit -> return next session ->
+3. **Analytics question (doc 10):** a cross-session comeback (fail -> quit -> return next session ->
    win) is invisible to a session-partitioned window; whether to measure it is a design choice,
    not a bug.

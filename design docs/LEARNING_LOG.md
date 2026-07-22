@@ -774,3 +774,63 @@ checks on material from PAST sessions, not just the current one. Space them out;
 exactly what the false-6/6 episode showed was missing. Good candidates to spiral back on:
 selectivity, correlation, the four scan types, index-only + visibility map/VACUUM, decomposable
 aggregates, and the watermark/immutability argument.
+
+### 2026-07-22 — RECALL REFRESHER (spaced retrieval) + the attemptsToPass rollup
+
+Learner opened by requesting the refresher they'd asked for on 07-21: scan types, rollup,
+"materialize", VACUUM, visibility map vs bitmap. Delivered as a written refresher (as asked) with
+a 4-question retrieval set appended — no multiple choice.
+
+**Refresher content:** the four scan types framed by one question (*how many heap pages must I
+touch?*), including that Seq Scan is not a failure mode; visibility map vs bitmap side by side
+(persistent/on-disk/VACUUM-maintained/MVCC vs ephemeral/in-memory/per-execution/I-O-ordering);
+VACUUM's four jobs with ANALYZE separated out; **"materialize" disambiguated into three senses**
+(materialize a value = stored generated column; materialized view; the `Materialize` plan node) —
+that overload was the likely source of the fog; rollup as incremental precomputation and why
+matview REFRESH was rejected.
+
+**Retrieval results:**
+- ✅ Q1 (Index Only Scan with nonzero Heap Fetches): diagnosed cold VM + named VACUUM, confident
+  and unprompted. This is now RETAINED across sessions, not just recognised in the moment.
+- ✅ Q4 (bitmap): "how are these rows organized amongst these different pages" — essentially right.
+- ⚠️ Q4 (VM): said "can we currently see this page". Corrected: visibility is per-SNAPSHOT, which
+  a persistent shared bit cannot encode; the VM asks *is every row version on this page visible to
+  EVERY transaction*. Reader-independent, all-or-nothing, conservative.
+- ❌ Q2 (why sum+count not avg): had the RULE verbatim, could not walk the mechanism, and said so.
+  Honest self-report — the useful thing to say. Re-taught by shrinking to 4 numbers (A: 10/20/30,
+  B: 100 -> truth 40s, avg-of-avgs 60s) and naming the missing idea: **an average has discarded its
+  WEIGHT, and count IS the weight**; once discarded it cannot be re-weighted. Added the NULL half
+  (`AVG` ignores NULLs -> denominator is gap_count, not count).
+- ❌ Q3 (median): conflated median with COUNT DISTINCT. Corrected — same list, unrelated
+  operations; median-of-medians (2 vs 51 on the same tiny example) and, crucially, **no extra
+  column rescues it**, unlike avg. But the learner's closing instinct ("you may be able to derive
+  median during the query itself") was the right thread and got promoted into the day's main idea.
+
+**Design fork (the real lesson): GRAIN.** Reframed "can I roll this up?" as "**what grain do I roll
+up to**", rule: *never collapse past the grain that retains an aggregate's inputs* — a
+generalisation of round 3's decomposable-aggregates rule. Learner chose per-session (Option B).
+
+**Transfer check on `max`:** asked why `max` is the fragile one given it IS decomposable. Learner
+answered with the general grain point (correct, but the point already made) and missed the specific
+property. Taught: **`sum`/`count` are invertible, `max` is not** — a mis-folded session can be
+subtracted out of a sum, but a stored max can only be repaired by full recompute. Grounded in a
+real hazard here (1M `env='synthetic'` rows in the same table, `/stats/*` doesn't filter env).
+
+**Prediction before measuring the new read plan:** ✅ predicted Seq Scan, ✅ said an index on
+`(suspect, topic)` would not help. ❌ **Mechanism slip worth watching**: justified it with *"it's
+gotta look at almost all the events to know what came after"* — but the read query has NO window
+function any more; that work moved to fold time. The Seq Scan is justified by SELECTIVITY alone
+(no WHERE -> 100% of rows). **Right answer, mechanism borrowed from the previous slide** — the same
+shape as 07-21's "failure isn't a specific thing to index". Recurring pattern; flag it again.
+Timing prediction (~0.3 ms) was optimistic — actual 11.5 ms, because this table is 72,255 rows vs
+afterFailure's 239. That gap IS the Option B cost, and naming it was more useful than a hit.
+
+**Shipped:** `friction_attempts_rollup` + fold in the same transaction/`_settled` set as
+`friction_rollup`. attemptsToPass ~324 ms -> ~11.5 ms (~28x); **endpoint ~1,100 ms -> ~14 ms
+(~78x)** — "bounded by its slowest part" demonstrated a second time, since round 3 alone left the
+endpoint pinned at ~330 ms. Proven: symmetric EXCEPT 0/0 vs live; idempotent re-run folds 0; and a
+full truncate-and-rebuild reproduced the previously-verified `friction_rollup` 0/0, showing the
+fold is deterministic and "recompute from source" is always available as a repair.
+
+**Still not re-covered / next refresher candidates:** selectivity + correlation (why the planner
+picks Bitmap over Index Scan), `work_mem` and lossy bitmaps, GroupAggregate vs HashAggregate.

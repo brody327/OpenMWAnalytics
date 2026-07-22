@@ -124,6 +124,46 @@ export const frictionRollup = pgTable(
   (t) => [primaryKey({ columns: [t.suspect, t.topic, t.nextAction] })],
 );
 
+// --- /stats/friction attemptsToPass rollup (design docs 06 "Tuning round 3") ---
+//
+// The endpoint's other window query (ROW_NUMBER over attempts within session+suspect+topic,
+// ~324 ms / ~31.5k buffers) -- same neighbour-dependence problem, same fix. But note the GRAIN
+// is deliberately FINER than friction_rollup's, and that is the whole design decision:
+//
+//   friction_rollup       collapses the session dimension away  -> additive fold (count + count)
+//   friction_attempts_rollup  keeps one row PER SESSION         -> plain insert, DO NOTHING
+//
+// Two things fall out of keeping the session grain:
+//
+//  1. IDEMPOTENT BY CONSTRUCTION. (session_id, suspect, topic) is a real natural key, so a
+//     re-fold collides with itself and DO NOTHING absorbs it -- the same trick `events` ingest
+//     uses. friction_rollup can't do this: adding into an existing bucket is indistinguishable
+//     from the bucket already being right, hence its separate done-guard table.
+//     (The watermark is still load-bearing -- see refreshFrictionRollup. An unsettled session
+//     would insert a PROVISIONAL attempts_to_pass, and DO NOTHING would then cement it forever.)
+//
+//  2. NON-DECOMPOSABLE AGGREGATES STAY POSSIBLE. avg is decomposable (sum/count, both additive)
+//     but median/percentiles/COUNT DISTINCT are not: median-of-medians != median, and no set of
+//     stored summaries recovers it. They're computable here only because the per-session values
+//     are still present. Rule: never collapse past the grain that retains an aggregate's inputs.
+//     Also why `max_attempts_in_a_session` is RECOMPUTED at read rather than stored -- max is
+//     associative but NOT invertible, so a stored max can never be repaired by subtraction the
+//     way a sum can; its only repair is a full recompute from events.
+export const frictionAttemptsRollup = pgTable(
+  'friction_attempts_rollup',
+  {
+    sessionId: uuid('session_id').notNull(),
+    suspect: text('suspect').notNull(),
+    topic: text('topic').notNull(),
+    totalAttempts: integer('total_attempts').notNull(),
+    // NULL = this session never passed this topic. Load-bearing: count(attempts_to_pass) at read
+    // therefore counts only sessions that DID solve it, and solved=0 with attempts>0 is the
+    // unpassable-content signal (doc 10 Q1.6). Storing 0 here would destroy that distinction.
+    attemptsToPass: integer('attempts_to_pass'),
+  },
+  (t) => [primaryKey({ columns: [t.sessionId, t.suspect, t.topic] })],
+);
+
 // Idempotency guard: which sessions have already been folded into friction_rollup. Without
 // this, a second job run re-adds already-settled sessions and inflates every bucket. This is
 // ON CONFLICT DO NOTHING (ingest) one layer up -- "fold each settled session EXACTLY once".

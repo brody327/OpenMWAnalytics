@@ -70,34 +70,23 @@ export async function friction(_req: Request, res: Response): Promise<void> {
   // Q1.3 / Q1.6 -- how many attempts precede a success, and is anything unpassable.
   //
   // ROW_NUMBER() numbers each attempt within (session, suspect, topic); the first
-  // row_number carrying passed=true is therefore "it took this many tries."
-  // `min(...) FILTER (WHERE passed)` is NULL when a session never solved it -- which
-  // is the point: count(attempts_to_pass) then counts only the sessions that DID
-  // solve it, and solved=0 with attempts>0 is the unpassable-content signal (Q1.6).
+  // row_number carrying passed=true is therefore "it took this many tries." That per-session
+  // number is what the rollup stores, and it is NULL when a session never solved it -- which is
+  // the point: count(attempts_to_pass) counts only the sessions that DID solve it, so solved=0
+  // with attempts>0 is the unpassable-content signal (Q1.6).
+  //
+  // Read from friction_attempts_rollup, NOT the live ROW_NUMBER window (~324 ms, ~31.5k buffers,
+  // and no index can narrow it -- a window function depends on row adjacency, not a seekable
+  // value). The rollup stores the `per_session` CTE below, precomputed once per settled session;
+  // the outer aggregation that used to run over a freshly-windowed 1M-row scan now runs over a
+  // few thousand stored rows.
+  //
+  // Deliberately kept at PER-SESSION grain rather than collapsed to (suspect, topic): it makes
+  // the fold idempotent by natural key, keeps `max` recomputed rather than stored (max is not
+  // invertible, so a stored one can only ever be repaired by full recompute), and leaves the
+  // distribution intact so a future median/p90 stays answerable -- none of which survive a
+  // collapse. See schema.ts frictionAttemptsRollup for the full argument.
   const attemptsToPass = await db.execute(sql`
-    with attempts as (
-      select
-        session_id,
-        data->>'suspect'                as suspect,
-        data->>'topic'                  as topic,
-        (data->>'passed')::boolean      as passed,
-        row_number() over (
-          partition by session_id, data->>'suspect', data->>'topic'
-          order by seq
-        )                               as attempt_no
-      from events
-      where type = 'ConfrontationAttempted'
-    ),
-    per_session as (
-      select
-        session_id,
-        suspect,
-        topic,
-        count(*)::int                              as total_attempts,
-        min(attempt_no) filter (where passed)      as attempts_to_pass
-      from attempts
-      group by session_id, suspect, topic
-    )
     select
       suspect,
       topic,
@@ -106,7 +95,7 @@ export async function friction(_req: Request, res: Response): Promise<void> {
       sum(total_attempts)::int                             as total_attempts,
       round(avg(attempts_to_pass)::numeric, 2)::float      as avg_attempts_to_pass,
       max(total_attempts)::int                             as max_attempts_in_a_session
-    from per_session
+    from friction_attempts_rollup
     group by suspect, topic
     order by solved_sessions asc, total_attempts desc, suspect, topic
   `);

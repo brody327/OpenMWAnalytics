@@ -23,6 +23,10 @@ import { db } from '../db/client.js';
 // at read as sum/gap_count. You cannot average averages, and AVG ignores NULL gaps, so its
 // denominator is the non-null gap_count, not count.
 //
+// BOTH of the endpoint's window queries are folded here, from one _settled set in one
+// transaction: friction_rollup (afterFailure, LEAD) and friction_attempts_rollup
+// (attemptsToPass, ROW_NUMBER). They use DIFFERENT grains on purpose -- see schema.ts.
+//
 // Returns the number of sessions folded this run (0 in steady state). Idempotent: running it
 // twice in a row folds the second time's 0 new sessions and leaves the rollup unchanged.
 export async function refreshFrictionRollup(lateness = '10 minutes'): Promise<number> {
@@ -92,6 +96,44 @@ export async function refreshFrictionRollup(lateness = '10 minutes'): Promise<nu
         count           = friction_rollup.count           + excluded.count,
         gap_count       = friction_rollup.gap_count       + excluded.gap_count,
         sum_gap_seconds = friction_rollup.sum_gap_seconds + excluded.sum_gap_seconds
+    `);
+
+    // 2b. attemptsToPass, folded from the SAME _settled set inside the SAME transaction, so the
+    //     two rollups can never disagree about which sessions they cover (and one done-guard
+    //     row covers both).
+    //
+    //     Grain is per-session, unlike (2) -- see schema.ts frictionAttemptsRollup. Consequence:
+    //     the fold is a plain INSERT ... DO NOTHING, not additive arithmetic, because the natural
+    //     key (session_id, suspect, topic) makes a repeat fold collide with itself.
+    //
+    //     Reads the STORED GENERATED COLUMNS (suspect/topic/passed) rather than data->>'...' as
+    //     the live query in stats/friction.ts does. Same values by construction -- the columns are
+    //     GENERATED ALWAYS from exactly those expressions -- but they're indexed and heap-cheap.
+    await tx.execute(sql`
+      insert into friction_attempts_rollup (session_id, suspect, topic, total_attempts, attempts_to_pass)
+      with attempts as (
+        select
+          session_id,
+          suspect,
+          topic,
+          passed,
+          row_number() over (
+            partition by session_id, suspect, topic
+            order by seq
+          ) as attempt_no
+        from events
+        where type = 'ConfrontationAttempted'
+          and session_id in (select session_id from _settled)
+      )
+      select
+        session_id,
+        suspect,
+        topic,
+        count(*)::int                         as total_attempts,
+        min(attempt_no) filter (where passed) as attempts_to_pass
+      from attempts
+      group by session_id, suspect, topic
+      on conflict (session_id, suspect, topic) do nothing
     `);
 
     // 3. Mark those sessions done so a later run can never fold them again (exactly-once).
