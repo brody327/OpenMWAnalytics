@@ -834,3 +834,47 @@ fold is deterministic and "recompute from source" is always available as a repai
 
 **Still not re-covered / next refresher candidates:** selectivity + correlation (why the planner
 picks Bitmap over Index Scan), `work_mem` and lossy bitmaps, GroupAggregate vs HashAggregate.
+
+### 2026-07-22 (later) — Scheduling, `install_id`, and a self-inflicted production 500
+
+**Built:** the CronJob scheduler, `install_id` on `friction_attempts_rollup`, and the prod deploy.
+
+**Teaching moment 1 — concurrency, and a "defensive fix" that would corrupt data.** Asked the
+learner to predict what two simultaneous folds do. They correctly said neither rollup ends up
+double-counted, and correctly singled out step 3's missing `ON CONFLICT` as the odd thing — but
+read it as a *bug* ("we don't want that"). It is load-bearing. Traced it concretely: `T2` DOES
+double-add into `friction_rollup`; what saves it is step 3 raising a unique violation and rolling
+the single transaction back. So adding `ON CONFLICT DO NOTHING` there — which looks purely
+defensive and is exactly what a reviewer would suggest — would commit the doubling silently.
+Added a `⚠️ DO NOT ADD` comment and an advisory lock (framed explicitly as *tidiness, not
+correctness*: it turns a crash into a quiet wait). Proven with 3 concurrent folds.
+
+**Teaching moment 2 — the grain decision paid off within the hour.** Doc 10 Q1.7 (cross-session
+comeback) had been parked as "invisible to a session-partitioned window". Resolved it by
+separating the ORDERED question (window partitioned by `install_id` — would break the rollup's
+correctness argument, since a new session could change a prior partition's answer, so nothing is
+ever frozen) from the SET-BASED question (`bool_or` grouped by install at read over rows that are
+individually frozen — costs the rollup nothing). Answerable *only* because round 4 kept the
+session grain.
+
+**⚠️ MY ERROR, and the honest version: I caused a production outage.** I deployed an image whose
+schema prerequisites were not in RDS. I created the three rollup tables but not the **stored
+generated columns on `events`** (`suspect`/`topic`/`reason`/`passed`) that the perf work added
+locally. Result: `/stats/confrontations` — an endpoint this session never edited — returned 500
+in production until I applied the DDL. `/stats/friction` failed more quietly, `200` with empty
+arrays, because its tables existed but the fold crashed on the same columns.
+
+Root cause is a **process gap, not a typo**: `db:generate`/`db:migrate` are wired up but no
+`drizzle/` migration has ever been generated, so schema is applied by hand and nothing links "code
+merged" to "schema applied". CI/CD ships code automatically and schema by memory. Written up in
+`09 §7` with a checklist, and generating a migration baseline + a pre-rollout Job is now the top
+deploy priority. Rule recorded: **schema lands first and must be backward-compatible**, because
+both versions run simultaneously during a rollout (two pods were briefly Running here).
+
+**A second mistake worth logging (mine):** I first reported the deploy as "stale image — missing
+entrypoint". It was not. `kubectl get pod -l app=... -o jsonpath={.items[0]}` had selected the
+OLD, terminating pod. The image was correct all along. Lesson: when checking a rollout, filter to
+the Running pod and compare the image *digest* — `items[0]` is not "the current pod".
+
+**Verified after the fix:** all four endpoints 200 with real data; fold ran (10 settled sessions);
+CronJob armed at `*/5`; 0 null `install_id`, 1 distinct install (the author — correct).
