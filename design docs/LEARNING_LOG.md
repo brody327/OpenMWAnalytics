@@ -728,3 +728,49 @@ re-deriving the async-rollup answer (exactly the queued /stats/friction plan).
 **Mistakes made & caught (mine):** backticks inside a sql template literal broke the TS build;
 drizzle-kit push needs a TTY and tried to drop the teaching toy tables (dropped them first).
 npm run build surfaced the first immediately -- the "verify, don't assume" habit paying off.
+
+### 2026-07-21 (later, cont.) — Friction rollup: precomputation when indexes can't help
+
+Continued the same day into the resume's still-false bullet (precomputation/materialized rollups),
+same method: teach the design before code, prediction/explain-back throughout, learner chose the
+design fork.
+
+**Concepts:** row-local vs row-relational work (why `LEAD`/`ROW_NUMBER` can't be index-narrowed --
+each output depends on a NEIGHBOUR row, not a seekable value); append-only + per-session-partition
+immutability as what makes incremental rollup CORRECT; decomposable aggregates (store sum+count,
+derive avg; AVG ignores NULLs so its denominator differs from count; percentiles/COUNT DISTINCT
+don't decompose); **watermark with allowed lateness** (named the stream-processing term for the
+learner's own instinct); the done-guard as exactly-once/idempotency one layer up from ON CONFLICT.
+
+**Assessments:**
+- Transfer (why can't an index help here?): partially right ("failure isn't a specific thing to
+  index") -- corrected: we DID index failure (`passed`); the real reason is neighbour-dependence.
+- Explain-back (the wasteful thing): nailed -- "we rebuild the whole thing every load when it
+  doesn't change unless there's something new."
+- ❌ **Key misconception, corrected:** thought a NEW session could change a PRIOR session's friction
+  ("they come back and solve it"). It can't -- the window partitions by `session_id` and each launch
+  mints a new one, so `LEAD` never crosses sessions. This was THE hinge of the whole design; worth
+  the time it took. (The learner's cross-session point survives as a real doc-10 analytics question,
+  parked.)
+- Design fork: chose Option B (incremental table) over a materialized view, with correct reasoning
+  (reusable/deeper, matches the resume bullet).
+- Good architectural instinct raised unprompted: "just emit a SessionEnded event." Addressed
+  seriously -- it's a valid v2 optimisation but not a replacement, because crashes/alt-F4 emit
+  nothing AND async shipping means "game done" != "we have all events". Taught: in an async pipeline
+  you can't KNOW you've seen everything, only wait a bounded time -> the watermark is unavoidable.
+- Honestly flagged not knowing what `LEAD` does after reasoning about it for a while -- taught it
+  concretely ("look at the next row"); should have checked this earlier.
+
+**Built + PROVEN (not asserted):** afterFailure rollup end-to-end -- correctness by symmetric EXCEPT
+diff = 0/0 vs the live query; idempotency by a 2nd run folding 0 sessions with buckets unchanged;
+776 ms -> ~0.3 ms (~2,700x). The rollup read is a Seq Scan on 239 rows -- and that is CORRECT,
+closing the loop with the night's very first `tiny`-table lesson.
+
+**Deferred:** attemptsToPass rollup (now the endpoint's tall pole, ~324 ms -- same pattern),
+scheduling the fold, the SessionEnded enhancement, the cross-session analytics question.
+
+**Process note (learner request, 2026-07-21):** wants periodic RECALL REFRESHERS -- short retrieval
+checks on material from PAST sessions, not just the current one. Space them out; spaced retrieval is
+exactly what the false-6/6 episode showed was missing. Good candidates to spiral back on:
+selectivity, correlation, the four scan types, index-only + visibility map/VACUUM, decomposable
+aggregates, and the watermark/immutability argument.
