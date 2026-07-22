@@ -5,6 +5,7 @@ import {
   integer,
   smallint,
   text,
+  boolean,
   timestamp,
   jsonb,
   primaryKey,
@@ -53,21 +54,24 @@ export const events = pgTable(
     // --- promoted hot keys (06 §2 anticipated this: "promote a hot payload field to a
     // real column or a generated column + index") ---
     //
-    // WHY, precisely: an expression index on (data->>'suspect') CAN filter, order and
-    // count -- but Postgres cannot RETURN an expression's value from an index-only scan.
-    // A query that SELECTs the extracted key therefore falls back to a heap visit for
-    // every matched row. Proven directly: count(*) on such an index got Heap Fetches: 0,
-    // while selecting the same expression paid a 29,555-block Bitmap Heap Scan.
-    //
-    // Stored generated columns hold the value as a real column, so an index over them
-    // supports a true index-only scan. Measured on 1M rows: 29,670 buffers -> 116,
-    // ~90ms -> ~7ms, and the plan drops from HashAggregate to GroupAggregate because the
-    // index supplies the ordering for free.
+    // WHY, precisely (measured on PG16): a plain index over a STORED generated column
+    // supports a true INDEX ONLY SCAN (Heap Fetches: 0). An *expression* index over the
+    // same `data->>'x'` does NOT -- the planner will not produce an index-only scan from it
+    // even when heap-touching plans are forced off (enable_bitmapscan/seqscan = off); it
+    // bitmap/heap-scans instead. Materializing the value into a real column is what unlocks
+    // an index-only scan at all. A second win when a query GROUPs on these: the index can
+    // supply sorted input, enabling a GroupAggregate rather than building a HashAggregate.
     //
     // GENERATED ALWAYS ... STORED (not a plain column) so the value cannot drift from
     // `data` -- Postgres recomputes it on write; nothing can set it inconsistently.
     suspect: text('suspect').generatedAlwaysAs(sql`data->>'suspect'`),
     topic: text('topic').generatedAlwaysAs(sql`data->>'topic'`),
+    // ConfrontationAttempted read-side keys, promoted for the /stats/confrontations
+    // aggregates (byReason groups on `reason` + filters on `passed`; byTopic filters on
+    // `passed` for pass_rate). `passed` is cast to boolean here so the value -- not the
+    // 'true'/'false' text -- is what gets stored and indexed.
+    reason: text('reason').generatedAlwaysAs(sql`data->>'reason'`),
+    passed: boolean('passed').generatedAlwaysAs(sql`(data->>'passed')::boolean`),
   },
   (t) => [
     // (session_id, seq) is BOTH the identity and the dedup key: a composite PK is
@@ -75,12 +79,21 @@ export const events = pgTable(
     primaryKey({ columns: [t.sessionId, t.seq] }),
     // Bread-and-butter analytics shape: "count <type> per day".
     index('events_type_ts_idx').on(t.type, t.ts),
-    // PARTIAL + COVERING: indexes only ConfrontationAttempted rows (13% of the table, so
-    // ~900kB against 62MB for the full type index), and carries both grouping keys so the
-    // aggregate never touches the heap. Every index is a tax on writes -- a partial one
-    // keeps that tax proportional to the rows a query actually cares about.
+    // PARTIAL: indexes only ConfrontationAttempted rows (~13% of the table). Every index is
+    // a tax on writes -- a partial one keeps that tax proportional to the rows a query
+    // actually cares about. Carries the grouping keys (suspect, topic) AND `passed`, so
+    // byTopic -- which reads `passed` for passes/pass_rate -- is fully index-only (no heap
+    // visit for the JSONB payload). `passed` is last because it is not part of the group
+    // key; leading with (suspect, topic) keeps the index ordered for the GROUP BY.
     index('events_confrontation_cols_idx')
-      .on(t.suspect, t.topic)
+      .on(t.suspect, t.topic, t.passed)
+      .where(sql`type = 'ConfrontationAttempted'`),
+    // byReason (failure-reason breakdown): filters `not passed` and groups on `reason`.
+    // Leading `passed` lets the scan seek the failed rows; `reason` rides along so the
+    // grouped count is index-only -- no heap visit for the JSONB payload. Same partial
+    // predicate keeps it to ConfrontationAttempted rows only.
+    index('events_confrontation_reason_idx')
+      .on(t.passed, t.reason)
       .where(sql`type = 'ConfrontationAttempted'`),
   ],
 );

@@ -337,6 +337,16 @@ an expression's value from an index-only scan.** The computed value is in the in
 planner will not reconstruct output columns from expression entries. Need the value → fetch
 the row. Our query *outputs* those expressions, so the index could never have helped.
 
+> ⚠️ **Correction (2026-07-21, re-measured on PG16 — see "Tuning round 2" below).** The
+> sharper, verified statement is: **an expression index does not support an index-only scan at
+> all** — not even for `count(*)`. Forcing the planner (`enable_bitmapscan = off;
+> enable_seqscan = off`) still produced a plain, heap-touching Index Scan, never an Index Only
+> Scan. A plain index over a **stored generated column** *does* get an index-only scan (Heap
+> Fetches: 0) for both counting and returning the value. Same conclusion — materialise the
+> expression — cleaner mechanism. The "116 buffers" figure below was a count-only query; the
+> real byTopic aggregate also reads `passed`, so it was never index-only until `passed` was
+> promoted too (round 2).
+
 **6. The fix — stored generated columns**, exactly as §2 anticipated ("promote a hot payload
 field to a real column or a generated column + index"):
 
@@ -361,6 +371,45 @@ table is built. The ordering came free with the index.
 still extracts `data->>'reason'` over every failed attempt. **A response is bounded by its
 slowest part** — optimising one of two caps the achievable gain. The next round either
 promotes `reason` too or rolls the whole endpoint into one precomputed result.
+
+---
+
+## Tuning round 2 — finish both queries (2026-07-21, later)
+
+**Result: the endpoint moved ~7× (≈148 ms → ≈21 ms warm), because BOTH queries were made
+index-only — not just one.** This is the concrete payoff of "bounded by its slowest part."
+
+Two more hot keys promoted to stored generated columns: `reason` (text) and `passed`
+(boolean — cast at generation, so the value not the `'true'/'false'` text is stored/indexed).
+Two partial indexes, both `WHERE type = 'ConfrontationAttempted'`:
+
+| Index | Serves | Why the column order |
+| --- | --- | --- |
+| `events_confrontation_reason_idx (passed, reason)` | `byReason` (`WHERE not passed GROUP BY reason`) | leading `passed` seeks the failed rows; `reason` rides along for the group |
+| `events_confrontation_cols_idx (suspect, topic, passed)` | `byTopic` (adds `passed` for `passes`/`pass_rate`) | `(suspect, topic)` first keeps the stream ordered for GROUP BY; `passed` trails |
+
+Reproduced, warm-to-warm, `EXPLAIN (ANALYZE, BUFFERS)`:
+
+| Query | Before | After |
+| --- | --- | --- |
+| `byReason` | Bitmap Heap Scan, HashAggregate, **31,106 buffers, ~91 ms** | **Index Only Scan, GroupAggregate, 85 buffers, ~7 ms** |
+| `byTopic`  | Parallel Bitmap Heap Scan, HashAggregate, **31,345 buffers, ~59 ms** | **Parallel Index Only Scan, GroupAggregate, 118 buffers, ~14 ms** |
+
+Both went `Heap Fetches: 0` and `HashAggregate → GroupAggregate` (the index supplies sorted
+input, so no hash table). ⚠️ **The read side must reference the generated columns** (`passed`,
+`reason`), not `data->>'…'`, or the planner won't use these indexes — updated in
+`confrontations.ts`.
+
+⚠️ **VACUUM gotcha, observed live.** Adding a `STORED` column **rewrites the table**, which
+resets the visibility map — so immediately after the push `byReason` was *still* a Bitmap Heap
+Scan (the planner declines index-only while the VM is cold). `VACUUM ANALYZE events` flipped it
+to the Index Only Scan above. (Contrast round 1 step 3, where `relallvisible` happened to be
+100% already — a rewrite is exactly when it is not.)
+
+**Design tradeoff, restated:** `events` is an analytics table — read-hot, write-tolerant (batched
+telemetry ingest) — so materialising these keys is justified. A field that were write-hot and
+read-rarely would not clear that bar; leave it in `data`. `/stats/friction` (filter matches ~99%
+of rows — no index can help) remains the case for a precomputed **rollup**, not more columns.
 
 ### ⚠️ Migration cost, if this ever goes to RDS
 
