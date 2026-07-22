@@ -564,6 +564,12 @@ Storing `0` would destroy that distinction.
    manual via `scripts/refresh-friction.mjs`).
 2. **Enhancement:** emit a `SessionEnded` event to settle clean exits sooner (still needs the
    watermark for crashes/alt-F4 and shipper lateness).
-3. **Analytics question (doc 10):** a cross-session comeback (fail -> quit -> return next session ->
-   win) is invisible to a session-partitioned window; whether to measure it is a design choice,
-   not a bug.
+3. ~~**Analytics question (doc 10):** cross-session comeback.~~ **RESOLVED 2026-07-22 -> doc 10
+   Q1.7.** Measured **set-based** (an install has both an unsolved and a solved session for a
+   topic), NOT as an `install_id`-partitioned window. The ordered version would break the rollup
+   correctness argument above -- partition by `install_id` and a new session can change a prior
+   partition's answer, so no partition is ever frozen and the incremental fold is invalid. The
+   set-based version aggregates **at read time over `friction_attempts_rollup`**, whose rows are
+   per-session and individually frozen, so it costs the rollup nothing. It is answerable only
+   because round 4 declined to collapse the session dimension. Prerequisite: add `install_id` to
+   `friction_attempts_rollup` (one column; re-fold is ~1.5 s -- do it before the table grows).
