@@ -96,6 +96,12 @@ export const events = pgTable(
     index('events_confrontation_reason_idx')
       .on(t.passed, t.reason)
       .where(sql`type = 'ConfrontationAttempted'`),
+    // Supports the HYBRID READ in stats/friction.ts: "which sessions have arrived recently and
+    // have not been folded into the rollup yet". Processing time, not event time -- the question
+    // is about what the pipeline has received, so `ts` (which the client supplies and can skew)
+    // is the wrong clock. Without this the candidate scan is a full pass over the PK index
+    // (~653 ms at 1M rows), which costs more than the query the rollup was built to replace.
+    index('events_received_at_idx').on(t.receivedAt),
   ],
 );
 

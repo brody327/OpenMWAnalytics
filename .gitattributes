@@ -8,5 +8,9 @@
 # stops dead and the cause is invisible).
 #
 # Pinning eol=lf makes the hash stable across Windows, CI, and the image.
-drizzle/**/*.sql text eol=lf
-drizzle/**/*.json text eol=lf
+# NOTE the leading `**/`: a gitattributes pattern containing a slash is anchored to the
+# directory holding this file, so plain `drizzle/**` would only match a repo-ROOT drizzle/ and
+# silently miss api/drizzle/ -- which is exactly where these live. Verify with:
+#   git check-attr text eol -- api/drizzle/0000_natural_morlocks.sql
+**/drizzle/**/*.sql text eol=lf
+**/drizzle/**/*.json text eol=lf

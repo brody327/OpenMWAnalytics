@@ -643,3 +643,74 @@ every tick — caught by reading the Dockerfile rather than trusting the manifes
 `src/jobs/refreshFriction.ts`, compiled into `dist/`, so local dev and the cluster run the
 identical artifact and the entrypoint is type-checked. It exits non-zero on failure so the Job is
 marked FAILED and surfaces in `kubectl get jobs` instead of hiding in a pod log.
+
+---
+
+## Tuning round 5 — the hybrid read: paying back the freshness regression (2026-07-22)
+
+Rounds 3–4 bought ~78x by reading precomputed tables — and quietly broke the thing the dashboard
+is *for*. The rollup covers only settled, folded sessions, so the session you just played was
+invisible for 10–15 minutes. For a mod-developer tool whose main use is *"I just played, what did
+that look like?"*, that is a bad trade.
+
+**The fix: answer each query in two halves and combine.**
+
+```
+folded sessions  ->  friction_rollup / friction_attempts_rollup   (precomputed, instant)
+everything else  ->  the original window query                    (live, a handful of sessions)
+```
+
+### The split key is the done-guard, not the watermark
+
+Splitting on *settled vs unsettled* leaves a **gap**: a session that has settled but has not yet
+been folded is excluded from the live half AND absent from the rollup, so it briefly
+**disappears** — worse than being stale, because the number silently shrinks. Splitting on
+*folded vs not folded* is exhaustive by construction: every session is in exactly one half.
+
+A useful consequence: **the fold is now purely an optimisation.** Correctness no longer depends
+on it having run — a dead cron makes the endpoint slower, not wrong.
+
+### Why filtering the live half is safe here (and was a trap before)
+
+Both queries `PARTITION BY session_id`, so restricting the live half to a set of whole **sessions**
+cannot change any other session's result. Contrast the original trap: filtering to failures before
+the window *would* change it, because that filters **rows within** a partition. **Filtering whole
+partitions is safe; filtering rows is not.**
+
+### The decomposable-aggregate rule is what makes it possible
+
+The halves are merged with `UNION ALL` and re-aggregated — `sum`s and `count`s add across halves,
+and `avg` is derived once at the end from the combined totals. Had we stored `avg_gap_seconds`
+directly, **the halves could not be merged at all.** Round 3's rule turned out to be load-bearing
+for a feature it was not written for.
+
+Likewise the per-session grain (round 4): `attemptsToPass`'s live half produces rows of exactly
+the rollup's shape, so the two just stack and the existing aggregation runs over the union
+unchanged. Under a collapsed Option A rollup, `max` would still merge but `avg_attempts_to_pass`
+could not — the sum+count it needs would never have been stored.
+
+### Cost, and the index it needed
+
+The naive "which sessions are unfolded?" (`select distinct session_id from events` anti-joined
+against the guard) cost **653 ms** — Postgres has no skip-scan, so it walks all 1M PK index
+entries, more than the query the rollup replaced. Bounding the candidate set by **processing
+time** (`received_at`, not client-supplied `ts`) plus `events_received_at_idx` fixes it.
+
+`LIVE_WINDOW` (default 30 min, env-tunable) is ~2x the normal fold latency (10 min watermark +
+5 min cron). ⚠️ If the fold is dead longer than that, sessions older than the window fall into
+neither half — so the response carries `coverage.fold_stale_seconds` and `coverage.live_sessions`,
+making a stalled fold **visible instead of a silent hole**.
+
+**Endpoint: ~14 ms -> ~19 ms**, and now always current. Paying 5 ms to stop lying about the last
+15 minutes is the right trade.
+
+### Proven in all three modes (identical output, not "looks right")
+
+| Mode | live sessions | result |
+| --- | --- | --- |
+| 100% folded | 0 | baseline |
+| 100% live (rollups truncated) | 9,255 | **identical to baseline** |
+| **mixed** (9,255 folded + 1 fresh session) | 1 | **identical to a full live recompute** |
+
+The mixed case is the one that matters — it is the only one where a double-count or a dropped
+session could hide, and it is the state production is always in.
