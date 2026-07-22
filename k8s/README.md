@@ -11,6 +11,7 @@ on the EC2 box, wired to the managed RDS Postgres.
 | `service.yaml` | Service (ClusterIP) | Stable in-cluster address in front of the pod; Ingress target |
 | `cluster-issuer.yaml` | ClusterIssuer ×2 | Let's Encrypt (staging + prod) ACME issuers for cert-manager |
 | `ingress.yaml` | Ingress | Public HTTPS route `api.omwanalytics.com` → the Service, TLS via cert-manager |
+| `cronjob-friction-rollup.yaml` | CronJob | Folds newly-settled sessions into the friction rollups every 5 min (design docs `06`) |
 | — | Secret | Holds `DATABASE_URL`; created imperatively, **never committed** |
 
 ## The Secret (do NOT put this in git)
@@ -74,6 +75,22 @@ Then apply the issuers and the route:
 kubectl apply -f cluster-issuer.yaml
 kubectl apply -f ingress.yaml
 ```
+
+Then the rollup scheduler (it reuses the same image and the same `omwa-api-secrets`):
+
+```bash
+kubectl apply -f cronjob-friction-rollup.yaml
+kubectl get cronjob omwa-friction-rollup
+kubectl get jobs -l app=omwa-friction-rollup     # did it run, did it work
+kubectl logs -l app=omwa-friction-rollup --tail=20
+kubectl create job --from=cronjob/omwa-friction-rollup rollup-manual-1   # force a run now
+```
+
+⚠️ **`friction_rollup`, `friction_sessions_done` and `friction_attempts_rollup` must exist in RDS
+before the API image that reads them is deployed** — `/stats/friction` selects from them, so
+without the tables the endpoint 500s. Create them first, then apply the CronJob, then let a fold
+run before expecting numbers. Until the first fold completes the endpoint returns empty arrays,
+not an error.
 
 Watch the ACME flow. A `Certificate` spawns a `CertificateRequest` → `Order` → `Challenge`;
 each disappears as it completes, and the `omwa-api-tls` Secret appearing means success:

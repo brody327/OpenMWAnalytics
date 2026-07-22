@@ -31,6 +31,17 @@ import { db } from '../db/client.js';
 // twice in a row folds the second time's 0 new sessions and leaves the rollup unchanged.
 export async function refreshFrictionRollup(lateness = '10 minutes'): Promise<number> {
   return db.transaction(async (tx) => {
+    // 0. Serialize concurrent folds (two API replicas, or a slow run overlapping the next tick).
+    //
+    //    A transaction-scoped ADVISORY LOCK: an application-defined mutex Postgres holds for us,
+    //    released automatically on commit OR rollback -- no unlock call, no leak on crash. The
+    //    key is arbitrary but must be agreed by every caller; it locks nothing physical.
+    //
+    //    Concurrency is ALREADY correct without this, but by crashing (see step 3). This makes
+    //    the second run wait, then find 0 settled sessions and do nothing -- quiet instead of a
+    //    unique-violation stack trace plus a wasted fold.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('friction_rollup_fold'))`);
+
     // 1. The settled-and-not-yet-done set, captured in a temp table so the fold (2) and the
     //    idempotency guard (3) operate on the IDENTICAL set within this transaction.
     await tx.execute(sql`
@@ -137,6 +148,20 @@ export async function refreshFrictionRollup(lateness = '10 minutes'): Promise<nu
     `);
 
     // 3. Mark those sessions done so a later run can never fold them again (exactly-once).
+    //
+    //    ⚠️ DO NOT ADD `on conflict do nothing` HERE. It looks like an obvious defensive tidy-up
+    //    and it would silently corrupt friction_rollup.
+    //
+    //    Without the advisory lock in (0) -- e.g. if someone removes it, or runs the fold from
+    //    two different code paths -- two concurrent folds BOTH add into friction_rollup at step
+    //    (2), because `count + excluded.count` on an already-committed row cannot tell "already
+    //    folded" from "fold me". The only thing that undoes that double-count is THIS insert
+    //    raising a unique violation and rolling the whole (single) transaction back. Swallow the
+    //    conflict and the doubling commits: every bucket permanently inflated, no error raised,
+    //    numbers that still look plausible.
+    //
+    //    friction_attempts_rollup does NOT depend on this -- its natural key makes DO NOTHING
+    //    correct there. Two rollups, two different reasons for concurrency safety.
     const done = await tx.execute(sql`
       insert into friction_sessions_done (session_id)
       select session_id from _settled

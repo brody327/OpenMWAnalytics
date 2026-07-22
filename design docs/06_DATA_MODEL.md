@@ -560,8 +560,8 @@ Storing `0` would destroy that distinction.
 
 ### Deferred
 
-1. **Scheduling** `refreshFrictionRollup()` -- pg_cron / Node interval / k8s CronJob (currently
-   manual via `scripts/refresh-friction.mjs`).
+1. ~~**Scheduling** `refreshFrictionRollup()`.~~ **DONE 2026-07-22** -> see "Scheduling the fold"
+   below.
 2. **Enhancement:** emit a `SessionEnded` event to settle clean exits sooner (still needs the
    watermark for crashes/alt-F4 and shipper lateness).
 3. ~~**Analytics question (doc 10):** cross-session comeback.~~ **RESOLVED 2026-07-22 -> doc 10
@@ -573,3 +573,72 @@ Storing `0` would destroy that distinction.
    per-session and individually frozen, so it costs the rollup nothing. It is answerable only
    because round 4 declined to collapse the session dimension. Prerequisite: add `install_id` to
    `friction_attempts_rollup` (one column; re-fold is ~1.5 s -- do it before the table grows).
+
+---
+
+## Scheduling the fold (2026-07-22)
+
+A precomputed rollup is only as good as whatever keeps it current. `k8s/cronjob-friction-rollup.yaml`
+runs `node dist/jobs/refreshFriction.js` **every 5 minutes**, using the same image as the API.
+
+### Why a CronJob, not `setInterval` and not `pg_cron`
+
+| | `setInterval` in the API | `pg_cron` in RDS | **k8s CronJob** ✅ |
+| --- | --- | --- | --- |
+| Runs the existing TypeScript fold | ✅ | ❌ reimplement in plpgsql | ✅ same image |
+| Survives an API deploy | ❌ restarts with the pod | ✅ | ✅ |
+| With N API replicas | **N schedulers** | 1 | 1 |
+| Failure visibility | a log line | `cron.job_run_details` | `kubectl get jobs` + backoff |
+
+The decisive argument against `pg_cron` is **not** the RDS parameter-group reboot. The fold's
+`CASE` ladder has a documented sync requirement with `stats/friction.ts`; porting it to plpgsql
+moves that logic where `tsc`, CI and code review cannot see it, and makes migrations the deploy
+path. **Logic in two languages is a worse problem than scheduling in two places.**
+
+### Cadence is constrained by the watermark, not free choice
+
+End-to-end staleness = **allowed lateness (10 min) + up to one interval**. A session that goes
+quiet at 12:00 settles at 12:10 and appears by ~12:15. Running faster than the watermark buys
+nothing — nothing can settle sooner than it allows.
+
+⚠️ **Freshness regression, stated honestly.** Before the rollup, `/stats/friction` read `events`
+live, so a session showed up *immediately*. It now lags ~10–15 min and the **currently-active
+session is excluded by design**. For a mod-developer tool whose main use is "I just played, what
+did that look like?", that is a real downgrade traded for the 78x. The proper fix is a **hybrid
+read** — serve settled sessions from the rollup and `UNION` the live query restricted to the few
+unsettled ones — not a faster cron. Deferred, but this is the reason not to slow the cadence down.
+
+### Concurrency: two rollups, two different reasons for safety
+
+`frictionRollup.ts` takes a **transaction-scoped advisory lock** (`pg_advisory_xact_lock`) —
+an application-defined mutex released automatically on commit *or* rollback. It locks nothing
+physical; the key just has to be agreed by every caller.
+
+It is a *tidiness* fix, not a correctness one, and the distinction matters:
+
+- **`friction_attempts_rollup` is safe on its own merits** — natural key + `ON CONFLICT DO NOTHING`.
+- **`friction_rollup` is not.** Two concurrent folds BOTH add into it (`count + excluded.count`
+  on an already-committed row cannot tell "already folded" from "fold me"). What undoes the
+  double-count is the **done-guard insert raising a unique violation and rolling the whole
+  single transaction back**.
+
+⚠️ **Therefore the missing `ON CONFLICT` on the done-guard insert is load-bearing, not an
+oversight.** Adding `DO NOTHING` there looks like a defensive tidy-up and would silently corrupt
+the rollup: the doubling would commit, every bucket permanently inflated, no error raised, numbers
+that still look plausible. There is a `⚠️ DO NOT ADD` comment in the code saying so.
+
+The advisory lock's contribution is to make the second run **wait and then do nothing** rather
+than crash — quiet instead of a unique-violation stack trace plus a wasted fold.
+
+**Proven:** three concurrent folds against a truncated rollup — one folded 9,255 sessions, the
+other two blocked for its duration then folded 0; symmetric `EXCEPT` vs. the pre-truncate state
+= **0 / 0**, no errors.
+
+### The runner lives in `src/`, not `scripts/` — deliberately
+
+The Dockerfile's runtime stage copies **only `dist/`**. The original `scripts/refresh-friction.mjs`
+was therefore absent from the image, and the CronJob would have died with `MODULE_NOT_FOUND` on
+every tick — caught by reading the Dockerfile rather than trusting the manifest. It is now
+`src/jobs/refreshFriction.ts`, compiled into `dist/`, so local dev and the cluster run the
+identical artifact and the entrypoint is type-checked. It exits non-zero on failure so the Job is
+marked FAILED and surfaces in `kubectl get jobs` instead of hiding in a pod log.

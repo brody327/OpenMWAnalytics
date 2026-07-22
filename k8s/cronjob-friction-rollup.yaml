@@ -1,0 +1,84 @@
+# CronJob: fold newly-settled sessions into the friction rollups.
+#
+# /stats/friction reads two precomputed tables instead of running window functions over the
+# whole event stream (design docs 06, tuning rounds 3-4; ~1,100 ms -> ~14 ms). Something has to
+# keep those tables current. This is that something.
+#
+# WHY A CRONJOB AND NOT setInterval IN THE API, OR pg_cron:
+#
+#   setInterval in the API   - dies and restarts with every deploy, runs once PER REPLICA, and
+#                              a failure is a log line nobody reads. It also competes with
+#                              request traffic for the same event loop and DB pool.
+#   pg_cron in RDS           - closest to the data, but the fold's CASE ladder has a documented
+#                              sync requirement with stats/friction.ts. Porting it to plpgsql
+#                              puts that logic where tsc, CI and code review cannot see it, and
+#                              makes migrations the deploy path. Logic in two languages is a
+#                              worse problem than scheduling in two places.
+#   CronJob (this)           - the orchestrator owns the schedule, so it fires exactly once per
+#                              tick no matter how many API replicas exist; it runs the SAME
+#                              image and the SAME TypeScript, so there is one implementation;
+#                              and failures are first-class objects (`kubectl get jobs`) with
+#                              retry policy, not log noise.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: omwa-friction-rollup
+  labels:
+    app: omwa-friction-rollup
+spec:
+  # Every 5 minutes. The cadence interacts with the WATERMARK, it is not free choice:
+  # end-to-end staleness = allowed lateness (10 min) + up to one interval. So a session that
+  # goes quiet at 12:00 settles at 12:10 and lands on the dashboard by ~12:15.
+  #
+  # Going slower makes a mod-developer tool ("I just played -- what did that look like?")
+  # noticeably stale; going faster buys nothing, because nothing can settle sooner than the
+  # watermark allows. Fix freshness properly with a hybrid read (rollup UNION the live query
+  # for the few unsettled sessions), not by hammering this.
+  schedule: "*/5 * * * *"
+  # Never run two folds at once. The fold is correct under concurrency either way -- an advisory
+  # lock serializes it (frictionRollup.ts step 0) -- but a queued duplicate is pure waste, and
+  # Forbid keeps a slow run from stacking up behind itself.
+  concurrencyPolicy: Forbid
+  # Keep a little history so `kubectl get jobs` can actually answer "did it run, did it work".
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # If the cluster is down/busy at tick time, skip a run more than 5 min late rather than
+  # firing a thundering herd of catch-up jobs when it recovers. Missing a fold is harmless:
+  # the next one picks up every session still unfolded (the work is a SET, not a queue).
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      # Retry a failed fold twice, then stop and stay visibly failed. The fold is one
+      # transaction, so a failed attempt left nothing behind to clean up.
+      backoffLimit: 2
+      template:
+        spec:
+          # Batch work must actually END. Never is what makes this a job and not a service:
+          # a non-zero exit is a failure to surface, not something to restart forever.
+          restartPolicy: Never
+          containers:
+            - name: refresh
+              # Same image as the API deployment on purpose -- the fold ships with the code it
+              # must stay in sync with, so a deploy can never leave them on different versions.
+              image: ghcr.io/brody327/omwanalytics-api:latest
+              imagePullPolicy: Always
+              # Overrides the image's CMD (`node dist/index.js`) -- same image, different
+              # entrypoint. The runner lives in src/ and is compiled into dist/ precisely so it
+              # exists in the image: the Dockerfile's runtime stage copies dist/ and nothing else.
+              command: ["node", "dist/jobs/refreshFriction.js"]
+              env:
+                - name: DATABASE_SSL
+                  value: "true" # RDS requires TLS; see api/src/db/client.ts
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: omwa-api-secrets
+                      key: DATABASE_URL
+              # No OMWA_INGEST_TOKEN: this job never serves the write path. Least privilege --
+              # a batch job that cannot authenticate an ingest cannot be tricked into accepting one.
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
