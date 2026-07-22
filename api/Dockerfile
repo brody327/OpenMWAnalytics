@@ -26,6 +26,11 @@ ENV NODE_ENV=production
 COPY package.json ./
 RUN npm install --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist ./dist
+# The migration SQL is DATA, not compiled output, so it must be copied explicitly -- tsc will
+# never put it in dist/. The initContainer runs `node dist/jobs/migrate.js`, which reads this
+# folder at runtime; without it the pod cannot start. (Forgetting exactly this kind of
+# not-compiled-but-required file is what kept scripts/ out of the image earlier.)
+COPY drizzle ./drizzle
 # The API reads PORT (default 4000) and DATABASE_URL from the environment at runtime;
 # both are injected by Kubernetes, never baked into the image.
 EXPOSE 4000

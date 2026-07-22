@@ -22,6 +22,38 @@ spec:
       labels:
         app: omwa-api
     spec:
+      # Schema migrations run BEFORE the app container, every rollout (design docs 09 §7).
+      #
+      # initContainers run to completion, in order, before any app container starts. That
+      # ordering is the entire point: a pod that cannot bring the schema up to date must not
+      # serve traffic against a schema it does not understand. If this fails, the pod never
+      # becomes Ready, the Deployment's rollout stalls, and -- critically -- the PREVIOUS pod
+      # keeps serving. A bad migration becomes a failed deploy instead of an outage.
+      #
+      # This exists because on 2026-07-22 the opposite happened: code shipped, schema didn't,
+      # and /stats/confrontations returned 500 in production.
+      #
+      # Same image as the app on purpose, so the migrations and the code that depends on them
+      # are always the same commit -- they cannot drift.
+      initContainers:
+        - name: migrate
+          image: ghcr.io/brody327/omwanalytics-api:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/jobs/migrate.js"]
+          env:
+            - name: DATABASE_SSL
+              value: "true"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: omwa-api-secrets
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
       containers:
         - name: api
           # :latest is convenient but NOT reproducible — you can't tell which commit is

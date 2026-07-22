@@ -9,6 +9,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "refresh-friction": "node dist/jobs/refreshFriction.js",
+    "db:baseline": "node dist/jobs/baselineMigrations.js",
+    "db:migrate:run": "node dist/jobs/migrate.js",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:push": "drizzle-kit push",
