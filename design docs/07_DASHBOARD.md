@@ -302,3 +302,69 @@ surrounding JS template literal.
   longer true of the *write* path:** deployment moved `POST /events` from "unreachable on
   localhost" to "world-writable on the internet," so anyone can inject fabricated telemetry.
   That is a real open gap — see `09_DEPLOYMENT.md` §6.
+
+---
+
+## §6 Event explorer (`/events`, 2026-07-23)
+
+The dashboard's second read shape. `/stats/*` answers *"is this mod being played as designed"*
+from precomputed rollups; the explorer answers *"what exactly happened"*, row by row.
+
+**It deliberately does not touch the rollups.** A rollup can only be filtered by dimensions in
+its grain; the explorer must filter on anything. Different question, different data path — which
+is why the grain collision that governs dashboard filters simply does not apply here.
+
+Justified by two decisions (doc 10 rule 1 — a view earns its place by naming one):
+1. **instrumentation debugging** — "did my new event fire, with what payload?", previously done
+   by grepping `openmw.log` and hand-writing psql;
+2. **drill-down** — "12 sessions abandoned this topic; show me one."
+
+### Filter state lives in the URL
+
+Not a framework preference — a product decision, and then a mechanical one.
+
+| | filters in the URL | filters in a store |
+| --- | --- | --- |
+| "look at this" | paste a link | screenshot, or "click X then Y" |
+| bookmark a view | free | build a saved-views feature |
+| **back button** | undoes a filter | leaves the page — reads as broken |
+| reload | survives | resets |
+| chart → filtered feed | plain `<a href>` | navigate, then push into the store, then reconcile |
+| copies of the state | **one** | two, needing bidirectional sync |
+
+The mechanical half: **a Server Component cannot hold state.** It runs once per request and is
+gone, so its only input is the request — which makes the query string the page's props. If
+filters lived in client state, the server would render a default view and the client would then
+fetch the real one: a flash of wrong content plus a round-trip waterfall.
+
+**What stays local:** uncommitted input (draft vs committed — a keystroke is not a shareable
+view, and committing per character means a request and a history entry each), and which row is
+expanded. Row *identity* could reasonably be shared — that is what a URL fragment is for — but
+its expansion state is presentation.
+
+⚠️ **A cursor encodes a position within a specific ordering of a specific result set.** Any
+filter (or sort) change must therefore DROP the cursor, or it points into a result set that no
+longer exists and silently returns a wrong slice with no error. Enforced in `EventFilters.tsx`
+and by keying the feed on the serialised filters.
+
+### Client/server split
+
+```
+page.tsx        Server Component   awaits searchParams, fetches page 1 + mod list concurrently
+EventFilters    Client Component   reads the URL, WRITES the URL, holds no filter state
+EventFeed       Client Component   accumulates pages, expands rows
+/api/events     Route Handler      same-origin proxy so the browser can page without CORS
+```
+
+The Route Handler exists because `OMWA_API_BASE` is a server-only env var *on purpose* (the API
+origin never ships to the browser) and Express sets no CORS headers. A thin BFF moves the call
+to the correct side of the boundary rather than widening the API's public surface for one button.
+It stays a pass-through: the moment it reshapes data, the server-rendered first page and the
+client-fetched later pages become two implementations that must agree.
+
+`useTransition` supplies `isPending` during the navigation. Every filter change is a server
+round-trip, and without a pending state the UI simply freezes — which is what makes this pattern
+feel slow when people meet it for the first time.
+
+⚠️ **Not visually eyeballed** — no browser available; verified by SSR HTML (row counts per
+filter, mod attribution, empty state) and `next build`.
