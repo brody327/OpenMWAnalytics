@@ -15,6 +15,13 @@
       "when": 1784763524609,
       "tag": "0001_mature_roxanne_simpson",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784765241504,
+      "tag": "0002_colorful_sentinel",
+      "breakpoints": true
     }
   ]
 }

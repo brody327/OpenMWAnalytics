@@ -181,6 +181,25 @@ export const frictionAttemptsRollup = pgTable(
   (t) => [primaryKey({ columns: [t.sessionId, t.suspect, t.topic] })],
 );
 
+// Liveness heartbeat for the fold job -- exactly one row, rewritten on every successful run.
+//
+// WHY IT EXISTS: /stats/friction reports how stale the rollup is, and the obvious source for
+// that -- max(friction_sessions_done.rolled_at) -- is WRONG. That timestamp only advances when a
+// session is actually folded, so during any quiet period (nobody playing) it grows without bound
+// and a perfectly healthy pipeline reports hours of staleness. Caught in production: the CronJob
+// was running every 5 minutes, completing, folding 0 sessions, and the endpoint claimed 2.2 hours.
+//
+// "When did the job last SUCCEED" and "when did the job last FIND WORK" are different questions;
+// a health signal must ask the first. Written inside the fold's transaction, so it records only
+// runs that actually committed.
+//
+// Single row (`id` is a constant-true primary key), so it cannot grow.
+export const frictionFoldState = pgTable('friction_fold_state', {
+  id: boolean('id').primaryKey().default(true),
+  lastRunAt: timestamp('last_run_at', { withTimezone: true }).notNull().defaultNow(),
+  lastSessionsFolded: integer('last_sessions_folded').notNull().default(0),
+});
+
 // Idempotency guard: which sessions have already been folded into friction_rollup. Without
 // this, a second job run re-adds already-settled sessions and inflates every bucket. This is
 // ON CONFLICT DO NOTHING (ingest) one layer up -- "fold each settled session EXACTLY once".

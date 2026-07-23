@@ -225,11 +225,17 @@ export async function friction(_req: Request, res: Response): Promise<void> {
 
   // Coverage metadata, so a stalled fold is VISIBLE rather than a silent hole. If the fold has
   // not run for longer than LIVE_WINDOW, sessions older than the window are in neither half.
+  // fold_stale_seconds comes from the fold's LIVENESS heartbeat, not from the newest done-guard
+  // row. The done-guard only advances when a session is actually folded, so during any quiet
+  // period it grows without bound and a healthy pipeline reports hours of staleness (observed in
+  // production: cron completing every 5 min, folding 0 sessions, endpoint claiming 2.2 hours).
+  // "Last succeeded" and "last found work" are different questions; health wants the first.
+  // NULL = the fold has never run.
   const coverage = await db.execute(sql`
     select
-      extract(epoch from (now() - max(rolled_at)))::int as fold_stale_seconds,
-      (select count(*) from (${unfolded}) u)::int       as live_sessions
-    from friction_sessions_done
+      (select extract(epoch from (now() - last_run_at))::int from friction_fold_state)
+        as fold_stale_seconds,
+      (select count(*) from (${unfolded}) u)::int as live_sessions
   `);
 
   res.json({
