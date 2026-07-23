@@ -172,6 +172,19 @@ export async function refreshFrictionRollup(lateness = '10 minutes'): Promise<nu
       select session_id from _settled
     `);
 
-    return done.rowCount ?? 0;
+    const folded = done.rowCount ?? 0;
+
+    // 4. Liveness heartbeat. INSIDE the transaction, so it records only runs that committed --
+    //    and unconditionally, even when 0 sessions were folded, which is the whole point: a quiet
+    //    period must look healthy, not stale. See schema.ts frictionFoldState.
+    await tx.execute(sql`
+      insert into friction_fold_state (id, last_run_at, last_sessions_folded)
+      values (true, now(), ${folded})
+      on conflict (id) do update set
+        last_run_at = excluded.last_run_at,
+        last_sessions_folded = excluded.last_sessions_folded
+    `);
+
+    return folded;
   });
 }
