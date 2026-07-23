@@ -130,6 +130,21 @@ export const events = pgTable(
     // is the wrong clock. Without this the candidate scan is a full pass over the PK index
     // (~653 ms at 1M rows), which costs more than the query the rollup was built to replace.
     index('events_received_at_idx').on(t.receivedAt),
+    // The event EXPLORER's feed order (newest first), and the index that makes KEYSET
+    // pagination work. Its column order must match the ORDER BY exactly -- the whole point is
+    // that the index can seek straight to a cursor position and then walk.
+    //
+    // Measured on 1M rows, both plans using THIS index:
+    //   keyset  page N     -> 50 rows, ~0.14 ms   (seek to the cursor value, read 50)
+    //   OFFSET  500000     -> 500,050 rows, ~218 ms (~1,500x) -- it must WALK past them
+    // A B-tree has no rank/order statistic, so there is no such thing as seeking to the
+    // 500,000th entry. An index cannot rescue OFFSET; only a different query shape can.
+    //
+    // (ts, session_id, seq) is also a TOTAL order -- ts alone ties constantly, and a
+    // non-deterministic tie-break would make pages overlap or skip regardless of technique.
+    index('events_feed_idx').on(
+      sql`ts desc`, sql`session_id desc`, sql`seq desc`,
+    ),
   ],
 );
 
