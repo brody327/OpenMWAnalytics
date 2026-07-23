@@ -921,3 +921,93 @@ walks all 1M PK entries). Bounded by `received_at` + a new index instead.
 **Verification standard held:** proven identical in three modes — 100% folded, 100% live, and
 MIXED (9,255 folded + 1 fresh session vs. a full live recompute). The mixed case is the only one
 where a double-count or dropped session could hide, and it is the state production is always in.
+
+### 2026-07-23 — Multi-mod, the explorer, and a pivot to React fundamentals
+
+**Recall refresher first (learner-requested, spaced retrieval).** Written refresher on the four
+scan types, visibility map vs bitmap, VACUUM, "materialize" (disambiguated into three senses:
+stored generated column / materialized view / the `Materialize` plan node — that overload was the
+likely source of the fog), and rollups. Then four retrieval questions, no multiple choice.
+
+- ✅ Cold VM → VACUUM: diagnosed confidently and unprompted. **Retained across sessions**, not
+  just recognised in the moment.
+- ⚠️ VM phrasing: said "can we currently see this page". Corrected — visibility is per-SNAPSHOT,
+  which a shared persistent bit cannot encode; the VM asks *is every row version on this page
+  visible to EVERY transaction*.
+- ❌→✅ sum+count vs avg: had the rule verbatim, could not walk the mechanism, and **said so**.
+  Re-taught on four numbers (A: 10/20/30, B: 100 → truth 40s, avg-of-avgs 60s). Missing idea
+  named: **an average has discarded its WEIGHT, and count IS the weight.**
+- ❌→✅ median: conflated with COUNT DISTINCT. Corrected — same list, unrelated operations; and
+  crucially **no extra column rescues a median**, unlike avg.
+
+**Dimensions vs measures.** The learner answered a filter question in terms of *measures*. Named
+the distinction explicitly, because it governs everything that followed: **a measure must be
+decomposable to survive a rollup; a dimension must be IN THE GRAIN to be filterable at all.**
+
+**Strategic design session (learner-led, and the best thinking of the day).** They reframed the
+project from proof-of-concept to platform, and pushed back correctly twice:
+- `mod_id` should name the **content domain**, not the emitting code — hence `base` for unmodded
+  engine behaviour, and no `omwanalytics` id, because this project authors no content. Better
+  than my original "the mod that owns the event".
+- On auth: reasoned unprompted through authentication vs **authorization**, concluded correctly
+  that neither is needed yet but both are worth being able to discuss. I extended it: the
+  interesting half here is **tenancy**, and `mod_id` is the tenancy key — so adding the dimension
+  now makes future authz a filter rather than a redesign.
+
+**Verified rather than assumed (repeatedly).** Whether `mod_id` could be auto-derived was settled
+by reading a real `openmw.log` line (prefix is always our own emitter) and the sandbox docs (no
+`debug` library) — *then* designing. Same for Next 16's `searchParams` being a Promise, read from
+the project's generated types after `node_modules/next/dist/docs/` turned out not to exist.
+
+**Prediction before measuring — OFFSET vs keyset.** Learner predicted "same cost, you can index
+to it, you know the count from ANALYZE." ❌ Measured: same index, 0.14 ms vs 218 ms (~1,500x).
+Correction: **a B-tree has no rank statistic** — there is no seeking to the Nth row — and ANALYZE
+produces planner *estimates*, not positional access. They did not know the correctness half
+(OFFSET is anchored to a count, which drifts on an append-only newest-first feed), which was the
+more important half.
+
+**⚠️ MY BUG, found only by measuring.** `ORDER BY` resolves a bare name against SELECT **output
+aliases** first; the feed query aliases the epoch-ms expression as `ts`, so `order by ts` sorted
+by a computed bigint no index covers. Parallel seq scan + top-N sort, ~0.14 ms → ~280 ms per
+page, with **completely correct results**. WHERE never sees output aliases, which is why the
+cursor predicate was unaffected and nothing looked wrong. Third time this session the dangerous
+failure was the one that *looked* right (the others: shipping code without its schema — loud;
+and a staleness metric that read `max(rolled_at)` and so climbed forever while the cron was
+perfectly healthy — silent).
+
+**⚠️ Also mine: self-inflicted schema drift.** I created an index by hand while measuring, so the
+migration then failed with "already exists" — drift caused by exploratory DDL outside the very
+tool built to prevent it. Undone and re-applied through the migration.
+
+---
+
+## ▶ PIVOT (learner request, end of session): React fundamentals before more features
+
+> *"When I'm looking through the React app, I'm having trouble actually parsing what I'm seeing.
+> It's recognizable, but I want to focus more on the learning… so I can at least follow it and
+> understand how it works when I'm designing things around it."*
+
+This is the single most important signal of the session and it **overrides the feature roadmap**.
+The learner is a deep Angular/TS senior — so the gap is not "learning to program a UI", it is
+**JSX and the React execution model being genuinely unfamiliar**, and code that reads fine to me
+being opaque to them. Building more of it faster makes the problem worse, not better.
+
+Started the correction: taught JSX-is-JavaScript-not-a-template with an Angular mapping table
+(`*ngIf` → `&&`, `*ngFor` → `.map()`, `trackBy` → `key`, `[ngClass]` → template literal, **no
+two-way binding exists**), and that the component function **re-runs every render**, so `useState`
+is not a field declaration but a request for a numbered slot — which is why hooks cannot sit
+inside `if`.
+
+**NEXT SESSION STARTS HERE, before any step-2 work:**
+1. **Quiz on React** — prediction/explain-back only, never multiple choice (see `.claude/skills/teach`).
+2. **Line-by-line walkthrough** of the three annotated examples, learner reading aloud/driving:
+   - `dashboard/app/components/NavBar.tsx` — the smallest complete component; contains
+     `'use client'`, a hook, `.map()` + `key`, a template-literal `className`, a ternary, and
+     `{expression}` interpolation.
+   - `dashboard/app/layout.tsx` — the Server/Client boundary and `children` as `<router-outlet>`.
+   - the drill-down block in `dashboard/app/page.tsx` — URL-as-state cashed out as a `<Link>`.
+3. Only then: step 2 (`/` → `/mods/ccff`, `/mods/[modId]`), which introduces dynamic segments
+   and `params` (also a Promise in Next 16).
+
+Comment density in the new dashboard files is deliberately high **for this reason** — they are
+teaching artifacts, not just code. If an annotation explains the wrong thing, that is signal.

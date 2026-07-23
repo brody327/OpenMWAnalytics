@@ -13,11 +13,11 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `02_EVENT_ENVELOPE.md` | The event envelope contract: universal metadata vs. event-specific payload, time model, versioning, delivery/ordering guarantees. **The foundational contract.** | ✅ locked |
 | `03_EVENT_REGISTRY.md` | Catalog of canonical event `type`s and their `data` shapes (the "tracking plan") — now the **public contract** third parties emit against. | 🟢 2 live (`AreaEntered`, `ConfrontationAttempted`); 3 exposure events designed 2026-07-20; `Spike*`/`Heartbeat` retired |
 | `04_SHIPPER_DESIGN.md` | The Node log-tailing shipper: offset tracking, truncation handling, batching, retries, at-least-once; operating it. | ✅ reliability pass done 2026-07-18 (durable offset, relaunch detection, at-least-once); §5 adds the first-run EOF trap + recovery |
-| `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested |
+| `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested; read side adds `GET /events` (keyset) + `GET /mods` 2026-07-23 |
 | `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented |
-| `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes; offline degradation. | 🟢 **live at `omwanalytics.com`** with real data + snapshot fallback |
-| `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ✅ SDK built (`OMWA_Track` + `track.lua`); auto path still open |
-| `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**: API `api.omwanalytics.com` + dashboard on Vercel; shipper repoint remains |
+| `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes; offline degradation. | 🟢 **live at `omwanalytics.com`**; + event explorer, nav, aggregate→explorer drill-down (2026-07-23, not yet deployed) |
+| `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ⚠️ SDK is now a FACTORY (`require(...)(modId)`, breaking, 2026-07-23) — **not yet verified in-game**; auto path still open |
+| `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**; + migrations run as an initContainer and a CronJob folds the rollups (2026-07-22) |
 | `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20 |
 | `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |
 
@@ -55,6 +55,27 @@ The MVP vertical slice is closed **and hardened** end-to-end:
   dogfoods the same path.
 - ✅ **Shipper reliability** (`04`): at-least-once delivery — durable offset,
   post-then-checkpoint, first-line-fingerprint relaunch detection. No longer flaky.
+
+### Session update (2026-07-23)
+
+**Postgres tuning is DONE and shipped** (`06` rounds 1–5): both confrontation aggregates are
+index-only (~7x), both `/stats/friction` window queries are incremental rollups folded by a
+scheduled k8s CronJob (~78x), and a hybrid read gives back the freshness the rollups cost.
+Schema migrations now run as an initContainer — added after shipping code without its schema
+caused a **production 500** (`09 §7`).
+
+**The platform is now multi-mod**: `mod_id` on every event (`02 §2a`), a `mods` registry, and an
+event explorer at `/events` with keyset pagination and URL-based filters (`05`, `07 §6`).
+
+▶ **Next, in order:**
+1. **Verify the SDK factory in-game** — it sits on the emit path for *every* event and is
+   **unverified**; if it is wrong, all telemetry stops silently.
+2. Move `/` → `/mods/ccff` and add `/mods/[modId]`.
+3. Build `/` as the platform home, with a slot for the AI insight layer.
+4. The AI insight layer — which must inherit `10 §3.3`'s sample-size discipline, or it will
+   confidently narrate a trend from four sessions.
+5. Dashboard filters over the rollups — deferred **deliberately** until the UI showed which
+   dimensions it asks for, because the rollup GRAIN determines which filters are possible at all.
 
 ### Next candidates (end of 2026-07-20)
 

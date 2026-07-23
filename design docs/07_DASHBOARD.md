@@ -368,3 +368,21 @@ feel slow when people meet it for the first time.
 
 ⚠️ **Not visually eyeballed** — no browser available; verified by SSR HTML (row counts per
 filter, mod attribution, empty state) and `next build`.
+
+### §6a Navigation and the drill-down (2026-07-23)
+
+`NavBar` lives in the root layout, so it mounts once and survives navigation between pages. It is
+a Client Component for exactly one reason — `usePathname()` marks the active link — which is the
+rule in miniature: default to Server Components, opt in only where state, effects, handlers or
+browser APIs are needed.
+
+Each row of the attempts-to-pass table links into the explorer pre-filtered to that
+suspect/topic. **This is the payback on putting filter state in the URL**, and the reason the
+explorer was justified at all ("12 sessions abandoned this topic — show me one"): because the
+explorer reads its filters from the URL, *constructing the URL is constructing the view*. It is
+a plain `<Link>` with nothing wired up. With filters in a client store it would have to
+navigate, seed the store, then reconcile whatever filters were already there.
+
+Verified via SSR HTML: nav on both routes with exactly one `aria-current="page"`; 35 drill-down
+links on `/`; following one returns 50 rows, all `ccff`, all `ConfrontationAttempted`.
+⚠️ **Not visually eyeballed** — no browser available.
