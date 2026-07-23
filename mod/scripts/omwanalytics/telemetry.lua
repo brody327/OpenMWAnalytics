@@ -76,6 +76,25 @@ end
 local MAX_DATA_KEYS  = 32
 local MAX_DATA_BYTES = 2048   -- serialized json.encode(data) byte cap
 
+-- mod_id: which mod's CONTENT the event is about (design docs 02). Self-declared by the
+-- caller and NOT verifiable -- OpenMW's sandbox has no `debug` library, so we cannot
+-- introspect who called us, and the log line is always attributed to this script. So we
+-- validate the FORMAT and nothing more.
+--
+-- A malformed id is normalised to 'unknown' rather than dropping the event: the id is
+-- metadata, and losing real telemetry over a bad label is the worse failure. Same posture
+-- as the API's env fallback.
+local MOD_ID_PATTERN = '^[a-z0-9][a-z0-9._%-]*$'
+local MAX_MOD_ID_LEN = 64
+
+local function normalizeModId(raw)
+    if type(raw) ~= 'string' then return 'unknown' end
+    local id = raw:lower()
+    if #id == 0 or #id > MAX_MOD_ID_LEN then return 'unknown' end
+    if not id:match(MOD_ID_PATTERN) then return 'unknown' end
+    return id
+end
+
 local function countKeys(t)
     local n = 0
     for _ in pairs(t) do n = n + 1 end
@@ -110,7 +129,7 @@ return {
                     .. ' (type=' .. tostring(type(e) == 'table' and e.type or e) .. ')')
                 return
             end
-            emit(e.type, e.data or {})
+            emit(e.type, e.data or {}, normalizeModId(e.mod_id))
         end,
     },
 }

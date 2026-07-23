@@ -52,7 +52,44 @@ queried with `->`). More in `06_DATA_MODEL.md`.
 | `install_id` | uuid | Anonymous install identity (persistent) | "How many distinct players?" |
 | `session_id` | uuid | Anonymous per-launch identity | Sessions, funnels, abandonment. |
 | `ts` | int | **Event time**: epoch **milliseconds** when it occurred, game-side | "When did the player do this?" (see §3). |
+| `mod_id` | string? | Which mod's **content** this event is about; `base` = unmodded engine behaviour | Makes the platform multi-mod: per-mod views, filters, and the future tenancy boundary (see §2a). |
 | `data` | object | Event-specific payload | The variety. |
+
+### 2a. `mod_id` — the content domain (added 2026-07-23)
+
+**Semantics: what the event is _about_, not what emitted it.** `AreaEntered` is emitted by our
+own `player.lua` but describes unmodded engine behaviour, so it is **`base`** — there is no
+`omwanalytics` mod id, because this project authors no content. `base` is deliberately *just
+another id*, not a special case, so per-mod pages, filters and any future tenancy rule work
+uniformly with zero branching.
+
+**Why it is per-event, unlike `env`.** `env` is a per-batch header because the *shipper* knows
+it. `mod_id` cannot be: one `openmw.log` interleaves events from every installed mod, so only
+the emitter knows the origin of a given line.
+
+**Why it must be DECLARED, not derived** — verified, not assumed:
+
+- The log prefix is always `Global[scripts/omwanalytics/telemetry.lua]`, because every mod
+  funnels through one global emitter. It identifies who called `print()`, not who caused it.
+- OpenMW's Lua sandbox allows only `coroutine, math, string, table, os` — **no `debug`
+  library**, so `track.lua` cannot introspect its caller.
+
+There is no automatic mechanism. The mod states its id **once**, when it requires the SDK
+(`require('scripts.omwanalytics.track')('ccff')`) — bound at require rather than passed per
+call, so a missed argument is a load-time error instead of a silently mislabelled slice of data.
+
+**Trust: self-declared and unverified**, exactly like `env`. A mod may claim any id; we validate
+the *format* (`[a-z0-9][a-z0-9._-]{0,63}`, lowercased/trimmed) and nothing more.
+
+**Optional on the wire, so `v` stays 1.** An older emitter that omits it still validates. `v`
+marks **breaking** envelope changes; an additive optional field is not one. A missing or
+malformed id normalises to `unknown` rather than 400-ing the batch — the id is metadata, and
+losing real telemetry over a bad label is the worse failure (the same posture as `env`
+defaulting to `prod`).
+
+⚠️ **Known seam.** This is the *emitting* domain. `AreaEntered` fires inside cells that belong
+to other mods — "Fastus Retreat" is CCFF content — so a `base` row can describe a modded
+location. Correct cell→mod attribution needs a content manifest (doc 10); deferred, not solved.
 
 The **shipper adds one field at the edge**, not present on the wire:
 

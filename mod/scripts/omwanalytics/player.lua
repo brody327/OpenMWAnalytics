@@ -16,7 +16,9 @@
 local self  = require('openmw.self')
 -- First-party use of our own public SDK helper (dogfooding). Unguarded require:
 -- track.lua always ships in this mod, so unlike a third party we don't pcall it.
-local track = require('scripts.omwanalytics.track')
+-- 'base' = unmodded engine behaviour. This mod authors no content, so the events it emits
+-- describe the base game, not a mod (design docs 02 mod_id).
+local track = require('scripts.omwanalytics.track')('base')
 
 local THROTTLE = 0.25   -- s; the cell changes rarely, no need to check every frame
 local accum = 0

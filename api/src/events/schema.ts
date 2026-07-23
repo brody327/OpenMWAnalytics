@@ -9,6 +9,15 @@ export const eventEnvelope = z.object({
   install_id: z.uuid(),
   session_id: z.uuid(),
   ts: z.number().int().positive(),         // event time as epoch milliseconds
+  // Which mod's content this event is about ('base' = unmodded engine behaviour). OPTIONAL on
+  // the wire, so this is an ADDITIVE, backward-compatible envelope change -- an older emitter
+  // that omits it still validates, which is why `v` stays 1. `v` marks BREAKING changes; a new
+  // optional field is not one.
+  //
+  // Deliberately NOT regex-validated here. A malformed id must not 400 the batch and lose real
+  // telemetry -- it is normalised to 'unknown' at ingest instead, the same "collect it, make the
+  // mistake visible" posture as `env` falling back to 'prod'.
+  mod_id: z.string().optional(),
   data: z.record(z.string(), z.unknown()).default({}),
 });
 

@@ -49,6 +49,34 @@ export const events = pgTable(
     // player set (invisible, permanent).
     env: text('env').notNull().default('prod'),
 
+    // --- content domain: WHICH MOD is this event about? ---
+    //
+    // Semantics: the content domain the event describes, NOT the code that emitted it.
+    // `AreaEntered` is emitted by our own player.lua but describes unmodded engine behaviour,
+    // so it is 'base' -- there is no 'omwanalytics' mod, because we author no content.
+    // 'base' is deliberately just another mod_id, not a special case: per-mod pages, filters
+    // and any future tenancy rule then work uniformly with zero branching.
+    //
+    // WHY IT IS PER-EVENT AND NOT A PER-BATCH HEADER (unlike `env`): one openmw.log interleaves
+    // events from every installed mod, so the shipper cannot know which mod a line came from.
+    //
+    // WHY IT IS DECLARED, NOT DERIVED (verified, not assumed): the log prefix is always
+    // `Global[scripts/omwanalytics/telemetry.lua]` -- our emitter, since every mod funnels
+    // through one global script -- and OpenMW's Lua sandbox allows only coroutine/math/string/
+    // table/os, so there is no `debug` library and no way to introspect the caller. The mod
+    // states its id once when it requires the SDK.
+    //
+    // TRUST: self-declared and unverified, exactly like `env`. A mod could claim any id.
+    // Format is validated at the emitter, not authenticated.
+    //
+    // Defaults to 'unknown' so an unlabelled event is COLLECTED and visibly wrong rather than
+    // rejected or silently attributed to something real.
+    //
+    // ⚠️ KNOWN SEAM: this is the *emitting* domain. `AreaEntered` fires inside cells that belong
+    // to other mods ("Fastus Retreat" is CCFF content), so a 'base' row can describe a modded
+    // location. Correct attribution needs a cell -> mod content manifest (doc 10); deferred.
+    modId: text('mod_id').notNull().default('unknown'),
+
     // --- payload ---
     data: jsonb('data').notNull().default({}),
 
@@ -104,6 +132,24 @@ export const events = pgTable(
     index('events_received_at_idx').on(t.receivedAt),
   ],
 );
+
+// Registry of mods seen by the platform. Auto-registered on first sight during ingest -- the
+// same zero-DDL philosophy as event types: a new mod requires no migration and no config, it
+// simply starts appearing. This is what gives /mods a real list and per-mod pages a title.
+//
+// It is a CACHE OF OBSERVED IDS, not an allow-list: nothing is rejected for being absent. That
+// keeps ingest fast (no lookup on the write path beyond one upsert) and keeps the platform
+// open, which is the point of a generic telemetry service. If it ever becomes an authorization
+// boundary, that is the table to add a key/owner column to -- which is the whole reason the
+// dimension exists now rather than later.
+export const mods = pgTable('mods', {
+  modId: text('mod_id').primaryKey(),
+  // Human label for the UI. NULL until someone sets it -- we cannot invent a display name from
+  // an id, and guessing one ("Ccff") would look broken in a heading.
+  displayName: text('display_name'),
+  firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 // --- /stats/friction incremental rollup (design docs 06 "Tuning round 3") ---
 //
