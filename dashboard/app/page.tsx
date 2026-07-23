@@ -3,6 +3,7 @@
 // client chart components. First view: "where do players get stuck in
 // confrontations?" (design docs 07).
 
+import Link from 'next/link';
 import { getConfrontationStats, getFrictionStats, getSkillStats } from './lib/stats';
 import { PassRateChart, FailureReasonChart } from './components/ConfrontationCharts';
 import { AfterFailureChart } from './components/FrictionCharts';
@@ -200,7 +201,30 @@ export default async function Home() {
                           key={`${r.suspect}:${r.topic}`}
                           className="border-b border-black/5 dark:border-white/5"
                         >
-                          <td className="py-2 pr-4">{titleCase(r.suspect)}</td>
+                          {/*
+                            THE DRILL-DOWN. This is the payoff of keeping filter state in the
+                            URL: "show me the individual attempts behind this row" is a plain
+                            link, not a feature. Nothing is wired up, no state is pushed
+                            anywhere -- the explorer reads its filters from the URL, so
+                            constructing the URL IS constructing the view.
+
+                            Had filters lived in a client store, this would have to navigate,
+                            then imperatively seed that store, then decide what happens to
+                            whatever filters were already in it.
+
+                            Link (not <a>) so Next does a client-side navigation: it fetches
+                            just the new page's data and swaps it in, instead of reloading the
+                            document and re-running everything.
+                          */}
+                          <td className="py-2 pr-4">
+                            <Link
+                              href={`/events?mod_id=ccff&type=ConfrontationAttempted&suspect=${encodeURIComponent(r.suspect)}&topic=${encodeURIComponent(r.topic)}`}
+                              className="underline decoration-dotted underline-offset-4 hover:decoration-solid"
+                              title={`See every attempt on ${titleCase(r.suspect)} / ${titleCase(r.topic)}`}
+                            >
+                              {titleCase(r.suspect)}
+                            </Link>
+                          </td>
                           <td className="py-2 pr-4">{titleCase(r.topic)}</td>
                           <td className="py-2 pr-4 text-right">{r.sessions}</td>
                           <td className="py-2 pr-4 text-right">
