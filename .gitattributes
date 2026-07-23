@@ -1,0 +1,16 @@
+# Migration files MUST be byte-identical on every machine.
+#
+# drizzle records an applied migration as the sha256 of its file CONTENTS. This repo is
+# developed on Windows with core.autocrlf=true, so without this rule a checkout would rewrite
+# these files to CRLF locally while the Linux CI runner and the container see LF -- different
+# bytes, different hash, and an already-applied migration would look PENDING. It would then be
+# re-run, hit "relation already exists", and fail the initContainer (safely, but the deploy
+# stops dead and the cause is invisible).
+#
+# Pinning eol=lf makes the hash stable across Windows, CI, and the image.
+# NOTE the leading `**/`: a gitattributes pattern containing a slash is anchored to the
+# directory holding this file, so plain `drizzle/**` would only match a repo-ROOT drizzle/ and
+# silently miss api/drizzle/ -- which is exactly where these live. Verify with:
+#   git check-attr text eol -- api/drizzle/0000_natural_morlocks.sql
+**/drizzle/**/*.sql text eol=lf
+**/drizzle/**/*.json text eol=lf

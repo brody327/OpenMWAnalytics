@@ -86,11 +86,22 @@ kubectl logs -l app=omwa-friction-rollup --tail=20
 kubectl create job --from=cronjob/omwa-friction-rollup rollup-manual-1   # force a run now
 ```
 
-⚠️ **`friction_rollup`, `friction_sessions_done` and `friction_attempts_rollup` must exist in RDS
-before the API image that reads them is deployed** — `/stats/friction` selects from them, so
-without the tables the endpoint 500s. Create them first, then apply the CronJob, then let a fold
-run before expecting numbers. Until the first fold completes the endpoint returns empty arrays,
-not an error.
+⚠️ **Schema must land in RDS BEFORE the image that depends on it.** There is no automated
+migration step yet (see design docs `09 §7`) — CI ships code, schema is applied by hand, and
+nothing links the two. This has already caused a production 500.
+
+For the rollup work specifically, RDS needs **both**:
+
+1. the three tables — `friction_rollup`, `friction_sessions_done`, `friction_attempts_rollup`
+   (incl. `install_id`);
+2. the **stored generated columns on `events`** — `suspect`, `topic`, `reason`, `passed`, plus
+   `events_confrontation_cols_idx` and `events_confrontation_reason_idx`, then
+   `VACUUM ANALYZE events` (adding a generated column rewrites the table, leaving the visibility
+   map cold, so index-only scans fall back to heap fetches until vacuumed).
+
+Missing (2) is what broke `/stats/confrontations` — an endpoint the rollup PR never touched.
+**Verify every endpoint after a deploy, not just the one you changed.** Until the first fold
+completes, `/stats/friction` returns empty arrays rather than an error.
 
 Watch the ACME flow. A `Certificate` spawns a `CertificateRequest` → `Order` → `Challenge`;
 each disappears as it completes, and the `omwa-api-tls` Secret appearing means success:

@@ -834,3 +834,90 @@ fold is deterministic and "recompute from source" is always available as a repai
 
 **Still not re-covered / next refresher candidates:** selectivity + correlation (why the planner
 picks Bitmap over Index Scan), `work_mem` and lossy bitmaps, GroupAggregate vs HashAggregate.
+
+### 2026-07-22 (later) — Scheduling, `install_id`, and a self-inflicted production 500
+
+**Built:** the CronJob scheduler, `install_id` on `friction_attempts_rollup`, and the prod deploy.
+
+**Teaching moment 1 — concurrency, and a "defensive fix" that would corrupt data.** Asked the
+learner to predict what two simultaneous folds do. They correctly said neither rollup ends up
+double-counted, and correctly singled out step 3's missing `ON CONFLICT` as the odd thing — but
+read it as a *bug* ("we don't want that"). It is load-bearing. Traced it concretely: `T2` DOES
+double-add into `friction_rollup`; what saves it is step 3 raising a unique violation and rolling
+the single transaction back. So adding `ON CONFLICT DO NOTHING` there — which looks purely
+defensive and is exactly what a reviewer would suggest — would commit the doubling silently.
+Added a `⚠️ DO NOT ADD` comment and an advisory lock (framed explicitly as *tidiness, not
+correctness*: it turns a crash into a quiet wait). Proven with 3 concurrent folds.
+
+**Teaching moment 2 — the grain decision paid off within the hour.** Doc 10 Q1.7 (cross-session
+comeback) had been parked as "invisible to a session-partitioned window". Resolved it by
+separating the ORDERED question (window partitioned by `install_id` — would break the rollup's
+correctness argument, since a new session could change a prior partition's answer, so nothing is
+ever frozen) from the SET-BASED question (`bool_or` grouped by install at read over rows that are
+individually frozen — costs the rollup nothing). Answerable *only* because round 4 kept the
+session grain.
+
+**⚠️ MY ERROR, and the honest version: I caused a production outage.** I deployed an image whose
+schema prerequisites were not in RDS. I created the three rollup tables but not the **stored
+generated columns on `events`** (`suspect`/`topic`/`reason`/`passed`) that the perf work added
+locally. Result: `/stats/confrontations` — an endpoint this session never edited — returned 500
+in production until I applied the DDL. `/stats/friction` failed more quietly, `200` with empty
+arrays, because its tables existed but the fold crashed on the same columns.
+
+Root cause is a **process gap, not a typo**: `db:generate`/`db:migrate` are wired up but no
+`drizzle/` migration has ever been generated, so schema is applied by hand and nothing links "code
+merged" to "schema applied". CI/CD ships code automatically and schema by memory. Written up in
+`09 §7` with a checklist, and generating a migration baseline + a pre-rollout Job is now the top
+deploy priority. Rule recorded: **schema lands first and must be backward-compatible**, because
+both versions run simultaneously during a rollout (two pods were briefly Running here).
+
+**A second mistake worth logging (mine):** I first reported the deploy as "stale image — missing
+entrypoint". It was not. `kubectl get pod -l app=... -o jsonpath={.items[0]}` had selected the
+OLD, terminating pod. The image was correct all along. Lesson: when checking a rollout, filter to
+the Running pod and compare the image *digest* — `items[0]` is not "the current pod".
+
+**Verified after the fix:** all four endpoints 200 with real data; fold ran (10 settled sessions);
+CronJob armed at `*/5`; 0 null `install_id`, 1 distinct install (the author — correct).
+
+### 2026-07-22 (later still) — Migrations as an initContainer, and the hybrid read
+
+Both items came straight out of the outage/regression list, so this was remediation, not new
+feature work. Teaching was thinner here by design — the learner asked to execute.
+
+**Migrations.** The interesting problem was **baselining**: adopting a migration tool onto a
+database that already has the schema. `drizzle-kit generate` emits bare `CREATE TABLE`s that fail
+against both DBs. Two options weighed in the code comments: add `IF NOT EXISTS` (rejected — it
+runs *green* against a drifted table, the same silent-wrongness class as the outage) vs. record
+the migration's hash as applied without running it (chosen — asserts exactly what is true).
+Required reading drizzle's migrator to learn the record is `sha256(file contents)` in
+`drizzle.__drizzle_migrations`. Verified the baseline's *claim* rather than trusting it: local and
+RDS column shapes diffed clean.
+
+Two traps caught, both of the "not-compiled-but-required" family:
+1. The Dockerfile copies only `dist/`, so `drizzle/` had to be copied explicitly — the same miss
+   that kept `scripts/` out of the image earlier the same day.
+2. `.gitattributes` — the applied-migration record is a hash of file BYTES, and `core.autocrlf=true`
+   would give Windows CRLF and CI LF, so an applied migration would look pending, be re-run, and
+   fail. **My first attempt at the rule silently did nothing**: a gitattributes pattern containing
+   a slash is anchored to the file's directory, so `drizzle/**` missed `api/drizzle/**`. Caught it
+   only because the commit output still warned about line endings; fixed with `**/drizzle/**` and
+   verified with `git check-attr` instead of assuming.
+
+**Hybrid read.** Design point worth keeping: the split key is the **done-guard, not the
+watermark**. Splitting on settled/unsettled leaves a gap where a settled-but-unfolded session is
+in neither half and briefly *disappears* — worse than stale, because the number silently shrinks.
+Folded/not-folded is exhaustive, which also demotes the fold to a pure optimisation: a dead cron
+now makes the endpoint slower, not wrong.
+
+**The payoff nobody designed for:** the halves merge with `UNION ALL` + re-aggregate *only*
+because round 3 stored decomposable parts (sum+count, avg derived) and round 4 kept per-session
+grain. Two rules adopted for other reasons turned out to be what made this feature possible at
+all. Worth showing the learner as the argument for principled constraints over local optimisation.
+
+**Measured before designing, again:** the obvious `select distinct session_id from events`
+anti-join cost **653 ms** — more than the query the rollup replaced (no skip-scan in PG16, so it
+walks all 1M PK entries). Bounded by `received_at` + a new index instead.
+
+**Verification standard held:** proven identical in three modes — 100% folded, 100% live, and
+MIXED (9,255 folded + 1 fresh session vs. a full live recompute). The mixed case is the only one
+where a double-count or dropped session could hide, and it is the state production is always in.

@@ -27,7 +27,51 @@ import { db } from '../db/client.js';
 //     level would make LEAD see only other failures -- "next event" would silently
 //     become "next failure." Hence the CTE: compute LEAD over the full stream first,
 //     filter to failures in the outer query.
+// How far back to look for sessions the fold has not covered yet (the HYBRID READ, below).
+//
+// Bounded on purpose. A session is normally folded within `lateness` (10 min) + one cron tick
+// (5 min), so 30 min is ~2x headroom. If the fold job has been dead longer than this, sessions
+// older than the window are in NEITHER half and silently vanish -- so the endpoint reports
+// `coverage.foldStaleSeconds` and consumers can say so out loud rather than render a hole.
+// Env-tunable so it can track the fold cadence without a redeploy -- and so tests can widen it
+// to force the live path over historical data.
+const LIVE_WINDOW = process.env.OMWA_FRICTION_LIVE_WINDOW ?? '30 minutes';
+
 export async function friction(_req: Request, res: Response): Promise<void> {
+  // --- THE HYBRID READ -------------------------------------------------------------------
+  //
+  // The rollup made this endpoint ~78x faster and introduced a freshness REGRESSION: it only
+  // covers SETTLED, FOLDED sessions, so the session you just played -- the one a mod developer
+  // actually wants to look at -- was missing for 10-15 minutes. That is a bad trade for a tool
+  // whose main use is "I just played, what did that look like?".
+  //
+  // So each query below is answered in two halves and combined:
+  //
+  //   folded sessions   -> read from the rollup           (precomputed, instant)
+  //   everything else   -> the original window query      (live, but over a handful of sessions)
+  //
+  // The split key is `friction_sessions_done`, NOT the watermark. Using the watermark would
+  // leave a gap -- a session that has settled but not yet been folded would be excluded from
+  // the live half AND absent from the rollup, so it would briefly DISAPPEAR. Splitting on
+  // "folded / not folded" is exhaustive by construction: every session is in exactly one half.
+  //
+  // WHY THIS IS CORRECT: both queries partition by session_id, so restricting the live half to
+  // a set of whole SESSIONS cannot change any other session's result. (Contrast the trap in the
+  // original query: filtering to failures before the window WOULD change it, because that
+  // filters ROWS WITHIN a partition. Filtering whole partitions is safe; filtering rows is not.)
+  //
+  // The fold is now purely an optimisation: correctness no longer depends on it having run.
+  const unfolded = sql`
+    select c.session_id
+    from (
+      select distinct session_id
+      from events
+      where received_at > now() - ${LIVE_WINDOW}::interval
+    ) c
+    left join friction_sessions_done d using (session_id)
+    where d.session_id is null
+  `;
+
   // Q1.4 -- what happens after a failed attempt.
   //
   // Buckets map onto the post-failure reading table in doc 10 §3.1:
@@ -56,14 +100,63 @@ export async function friction(_req: Request, res: Response): Promise<void> {
   // avg is DERIVED here (sum/gap_count), not stored: you cannot average averages, and AVG
   // ignores NULL gaps, so its denominator is gap_count (non-null), not count. nullif guards
   // the session_end buckets (all gaps NULL -> avg NULL), matching the live query exactly.
+  // The two halves are combined by UNION ALL and re-aggregated. This works *only* because the
+  // stored parts are DECOMPOSABLE: sums and counts add across halves, and avg is derived once at
+  // the end from the combined totals. Had we stored avg_gap_seconds directly, the two halves
+  // could not be merged at all -- averaging two averages weights a 1-event session equally with
+  // a 50-event one. The round-3 rule is what makes the hybrid read possible.
   const afterFailure = await db.execute(sql`
+    with live_stream as (
+      select
+        session_id, seq, type, ts, data,
+        lead(type) over w as next_type,
+        lead(data) over w as next_data,
+        lead(ts)   over w as next_ts
+      from events
+      where session_id in (${unfolded})
+        and type not in ('Heartbeat', 'SpikeStarted')
+      window w as (partition by session_id order by seq)
+    ),
+    live_fails as (
+      select
+        data->>'suspect' as suspect,
+        data->>'topic'   as topic,
+        case
+          when next_type is null then 'session_end'
+          when next_type = 'ConfrontationAttempted'
+               and next_data->>'suspect' = data->>'suspect'
+               and next_data->>'topic'   = data->>'topic'   then 'retried_same'
+          when next_type = 'ConfrontationExited'
+               and (next_data->>'completed')::boolean       then 'exited_solved'
+          when next_type = 'ConfrontationExited'            then 'abandoned'
+          when next_type = 'ConfrontationAttempted'         then 'switched_topic'
+          when next_type = 'AreaEntered'                    then 'left_area'
+          else 'other'
+        end as next_action,
+        extract(epoch from (next_ts - ts)) as gap_seconds
+      from live_stream
+      where type = 'ConfrontationAttempted'
+        and not (data->>'passed')::boolean
+    ),
+    combined as (
+      select suspect, topic, next_action, count, gap_count, sum_gap_seconds
+      from friction_rollup
+      union all
+      select
+        suspect, topic, next_action,
+        count(*)::int, count(gap_seconds)::int, coalesce(sum(gap_seconds), 0)
+      from live_fails
+      group by suspect, topic, next_action
+    )
     select
       suspect,
       topic,
       next_action,
-      count,
-      round((sum_gap_seconds / nullif(gap_count, 0))::numeric, 1)::float as avg_gap_seconds
-    from friction_rollup
+      sum(count)::int as count,
+      round((sum(sum_gap_seconds) / nullif(sum(gap_count), 0))::numeric, 1)::float
+        as avg_gap_seconds
+    from combined
+    group by suspect, topic, next_action
     order by count desc, suspect, topic
   `);
 
@@ -86,7 +179,37 @@ export async function friction(_req: Request, res: Response): Promise<void> {
   // invertible, so a stored one can only ever be repaired by full recompute), and leaves the
   // distribution intact so a future median/p90 stays answerable -- none of which survive a
   // collapse. See schema.ts frictionAttemptsRollup for the full argument.
+  // Hybrid here is even simpler than afterFailure: because the rollup kept PER-SESSION grain
+  // (round 4, Option B), the live half produces rows of exactly the same shape, so the two just
+  // stack with UNION ALL and the existing aggregation runs over the union unchanged. Under
+  // Option A -- collapsed to (suspect, topic) -- `max` could still be merged, but the average
+  // could not: avg_attempts_to_pass would need sum+count that a collapsed table never stored.
   const attemptsToPass = await db.execute(sql`
+    with live_attempts as (
+      select
+        session_id,
+        suspect,
+        topic,
+        passed,
+        row_number() over (
+          partition by session_id, suspect, topic
+          order by seq
+        ) as attempt_no
+      from events
+      where type = 'ConfrontationAttempted'
+        and session_id in (${unfolded})
+    ),
+    per_session as (
+      select session_id, suspect, topic, total_attempts, attempts_to_pass
+      from friction_attempts_rollup
+      union all
+      select
+        session_id, suspect, topic,
+        count(*)::int                         as total_attempts,
+        min(attempt_no) filter (where passed) as attempts_to_pass
+      from live_attempts
+      group by session_id, suspect, topic
+    )
     select
       suspect,
       topic,
@@ -95,13 +218,24 @@ export async function friction(_req: Request, res: Response): Promise<void> {
       sum(total_attempts)::int                             as total_attempts,
       round(avg(attempts_to_pass)::numeric, 2)::float      as avg_attempts_to_pass,
       max(total_attempts)::int                             as max_attempts_in_a_session
-    from friction_attempts_rollup
+    from per_session
     group by suspect, topic
     order by solved_sessions asc, total_attempts desc, suspect, topic
+  `);
+
+  // Coverage metadata, so a stalled fold is VISIBLE rather than a silent hole. If the fold has
+  // not run for longer than LIVE_WINDOW, sessions older than the window are in neither half.
+  const coverage = await db.execute(sql`
+    select
+      extract(epoch from (now() - max(rolled_at)))::int as fold_stale_seconds,
+      (select count(*) from (${unfolded}) u)::int       as live_sessions
+    from friction_sessions_done
   `);
 
   res.json({
     afterFailure: afterFailure.rows,
     attemptsToPass: attemptsToPass.rows,
+    // Additive key -- existing consumers ignore it.
+    coverage: coverage.rows[0] ?? null,
   });
 }

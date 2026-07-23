@@ -250,3 +250,48 @@ the dashboard is only as up as the EC2 box we stop between sessions; and optiona
 `kubectl apply` in CI to close the CD loop, an HTTP→HTTPS redirect middleware, and pinning the
 RDS CA bundle instead of `rejectUnauthorized:false`.
 Step-level detail lives in the `project-deployment-plan` memory.
+
+---
+
+## 7. Schema migration is the missing link in CI/CD (learned the hard way, 2026-07-22)
+
+**What happened.** The friction-rollup PR merged, CI built the image, the Deployment rolled out —
+and `/stats/confrontations` immediately started returning **500 in production**. The new image
+queries `events.suspect / topic / reason / passed`, the **stored generated columns** added during
+performance tuning. Those columns existed in local Docker Postgres and had never been applied to
+RDS. `/stats/friction` failed differently and more quietly: it returned `200` with empty arrays,
+because its tables existed but the fold job crashed on the same missing columns.
+
+**Root cause is a process gap, not a typo.** `api/package.json` wires up `db:generate` and
+`db:migrate`, but **no `drizzle/` migrations directory has ever been generated**. Schema changes
+are applied ad hoc — `drizzle-kit push` against local Docker, hand-written DDL against RDS. So
+*nothing connects "this commit merged" to "this schema is applied"*, and the pipeline will deploy
+code whose schema prerequisites do not exist. CI/CD is only half built: it ships **code**
+automatically and **schema** by memory.
+
+**Why it was not caught earlier.** Every previous deploy happened to be schema-compatible. The
+rollup work was the first change to add columns the read path *depends on*, so it was the first
+time the gap could bite.
+
+**The general rule:** in a deploy that ships code and schema separately, **schema must land first
+and be backward-compatible** — old code must tolerate the new schema, because during a rollout
+both versions run at once (two pods were briefly Running here). "Expand, then contract": add
+columns, deploy code that uses them, remove the old path later — never in one step.
+
+### Deploy checklist (until migrations are automated)
+
+Before merging anything that touches `api/src/db/schema.ts`:
+
+1. Diff the local schema against RDS — **tables AND columns AND indexes**, not just tables.
+2. Apply the DDL to RDS **first**, and `VACUUM ANALYZE` any table that got a generated column
+   (adding one rewrites the table, leaving the visibility map cold — see `06`, round 2).
+3. Then merge, let CI build, and roll out.
+4. Verify **every** endpoint, not the one you changed. The 500 here was on
+   `/stats/confrontations`, which this session never edited.
+
+### Remaining work (now the top deploy priority)
+
+Generate a real migration baseline (`npm run db:generate`), commit it, and run
+`drizzle-kit migrate` as a **k8s Job or an init container** before the Deployment rolls. That
+turns the checklist above into something the pipeline enforces instead of something a human
+remembers. Until then, treat every `schema.ts` change as a manual RDS change too.
