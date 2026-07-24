@@ -41,7 +41,7 @@ local sessionId = uuid4()
 local seq = 0
 
 -- --- emit -----------------------------------------------------------------
-local function emit(eventType, data)
+local function emit(eventType, data, modId)
     seq = seq + 1
     print(SENTINEL .. ' ' .. json.encode({
         v          = 1,
@@ -50,6 +50,8 @@ local function emit(eventType, data)
         ts         = os.time() * 1000,   -- event time: epoch milliseconds (wire contract)
         install_id = installId,          -- snake_case keys to match the API/DB
         session_id = sessionId,
+        mod_id     = modId or 'unknown', -- content domain (02); handler pre-normalizes, this
+                                         -- default only guards a future direct caller
         data       = data or {},
     }))
 end
