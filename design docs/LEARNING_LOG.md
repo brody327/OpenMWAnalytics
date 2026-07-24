@@ -3,6 +3,49 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-23 — React fundamentals: the render model + the server/client boundary (dashboard)
+
+Learner asked (end of prior session) to pause feature work and learn to *read* the
+React app: JSX and the execution model were opaque even to a deep Angular/TS senior.
+Plan was quiz → line-by-line walkthrough of 3 files, learner driving → then features.
+
+**Assessment types used:** prediction, explain-back, transfer, debug (no multiple choice).
+
+**Opening quiz (5 Q) — honest result: 1 full, 2 partial, 2 wrong.**
+- Q3 (transfer, controlled input `value`+`onChange`): **full** — including the frozen-input
+  failure mode. Solid.
+- Q5 (URL-as-state payoff): **partial** — got *why* URL state is good, missed the concrete
+  steps a client-store version would add (navigate → seed store → reconcile existing filters).
+- Q4 (server/client boundary): **partial** — right frame, but never found the actual trigger
+  (`usePathname()` is a hook ⇒ requires `'use client'`); invented a data-fetch role for layout.
+- Q1 (move `LINKS` inside the component): **wrong, backwards** — predicted it would break; it
+  renders fine, just rebuilds the array every render.
+- Q2 (`aria-current={… : undefined}` vs `false`): **wrong** — guessed TypeScript; it's a
+  JSX-omits-falsy runtime rule (and aria-* passes `false` through as the string "false").
+
+**Diagnosed gap:** the foundational model — *a component is a function React re-CALLS on every
+render; a re-render IS another call; `.map` callbacks run per element per call* — was not solid.
+Q1 and Q4 were both downstream of that.
+
+**Re-taught forward from the break point (learner driving all three):**
+- NavBar → render model. Locked via prediction: on `/` → `/events` the body runs **twice**
+  (once per render), and line 44 (`isActive`) runs **twice per render** (once per link). Learner
+  got both, and surfaced `useMemo`/`useCallback` as the opt-outs unprompted.
+- layout.tsx → server/client boundary. Learner correctly reasoned server→client is allowed,
+  client→server breaks, `'use client'` on root would forfeit SSR app-wide, layout doesn't
+  re-render on nav (so NavBar keeps state). Asked the *right* question spontaneously: "if hooks
+  only work in client components, why ever use a server component?" → taught the capability/weight
+  table (zero JS shipped, direct `await` to backend, holds secrets vs. no interactivity).
+- page.tsx drill-down → URL-as-state. Learner **predicted the mechanism before opening the file**:
+  filters read on the *server* via `searchParams` (a prop, not a hook; a Promise in Next 16).
+  Closed two self-found gaps: `title` is a native HTML attr forwarded through `<Link>` to `<a>`;
+  `r` = row (learner's readability critique is correct).
+
+**Outcome:** model moved from "recognizable but opaque" to predicting `searchParams` unaided.
+Cleared the gate for step 2 (`/mods/[modId]`, dynamic segments + `params` Promise). The two
+wrong quiz predictions were *productive* — they located the exact fault line, unlike a clean
+score would have.
+
 ## 2026-07-20 — Public URL, dashboard deploy, and the loop closed in the cloud (`09`, `07`, `04`)
 
 Finished the deploy: **`https://omwanalytics.com`** (dashboard) over
