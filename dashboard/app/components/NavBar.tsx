@@ -16,7 +16,7 @@ import { usePathname } from 'next/navigation';
 // belongs out here: the component function re-runs on every render, so a value defined INSIDE
 // would be rebuilt each time for no reason.
 const LINKS = [
-  { href: '/', label: 'Overview' },
+  { href: '/', label: 'Mods' },
   { href: '/events', label: 'Events' },
 ];
 
