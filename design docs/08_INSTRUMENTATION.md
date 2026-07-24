@@ -109,3 +109,67 @@ zero other-mod cooperation. Everything shipped so far is the *manual* path.
 - Payload size/quota policy per emitting mod (abuse / runaway loops).
 - How a third-party mod declares its event types into the registry (self-describing
   vs. curated).
+
+---
+
+## 7. The SDK is now a factory — mods declare their id (2026-07-23)
+
+⚠️ **Breaking change to the public SDK surface.**
+
+```lua
+-- before
+local track = require('scripts.omwanalytics.track')
+-- after
+local track = require('scripts.omwanalytics.track')('ccff')
+```
+
+`track.lua` no longer *is* the tracker; it *returns* one, bound to the calling mod's id. The id
+names the **content domain** the events describe (`02 §2a`) — which is why this project's own
+`player.lua` passes `'base'`, not a mod name: it emits about unmodded engine behaviour and
+authors no content.
+
+### Why declared, and not derived — verified, not assumed
+
+Two candidate automatic mechanisms, both closed:
+
+1. **Log attribution fails.** Every mod funnels through one global emitter, so the line is always
+   `Global[scripts/omwanalytics/telemetry.lua]`. The prefix identifies who called `print()`, not
+   who caused the event.
+2. **Caller introspection is impossible.** OpenMW's sandbox allows only `coroutine, math, string,
+   table, os` — there is **no `debug` library**, so `debug.getinfo` does not exist.
+
+Declaration is the only mechanism available. This is a constraint, not a preference.
+
+### Why bound at `require`, not passed per call
+
+A per-call id must be repeated at every call site (CCFF has eight), and one missed argument
+silently mislabels a slice of the data — a bug that surfaces months later as a chart that is
+quietly wrong. Bound once, forgetting it is a **load-time error**. This is the "client instance"
+pattern every analytics SDK uses.
+
+### Why a hard break rather than a backward-compatible overload
+
+`track('ccff')` and `track('MyEvent')` are both a single string argument, with nothing to
+distinguish a mod id from an event name. **An API where two meanings share one signature cannot
+be disambiguated by documentation** — so a clean break was the honest option.
+
+### Trust and validation
+
+Self-declared and **unverified**, exactly like `env`. A mod may claim any id. Format is validated
+(`[a-z0-9][a-z0-9._-]`, ≤64 chars, lowercased/trimmed) at *both* the Lua emitter and the API,
+because the emitter runs in another author's untrusted context. A malformed id normalises to
+`'unknown'` rather than dropping the event.
+
+The factory itself **errors** on a missing id, unlike everything else here, which degrades
+quietly. That asymmetry is deliberate: a bad id is a mistake made once at load by the author who
+can fix it immediately, so a hard error is cheap and unmissable. A bad *event* happens at runtime
+in a player's game, where crashing a session over telemetry would be indefensible.
+
+### Consumers updated
+
+`player.lua` → `'base'`; CCFF's four guarded requires (`confront_panel`, `evidence_bridge`,
+`evidence_inspect`, `evidence_player`) → `'ccff'`.
+
+⚠️ **NOT YET VERIFIED IN-GAME.** This change sits on the emit path for *every* event, so if it is
+wrong all telemetry stops silently. One launch plus a confrontation attempt verifies it
+(`/verify-pipeline`). Luacheck passes with 0 errors, which proves syntax, not behaviour.

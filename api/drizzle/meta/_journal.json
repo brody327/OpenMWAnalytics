@@ -22,6 +22,20 @@
       "when": 1784765241504,
       "tag": "0002_colorful_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784770932158,
+      "tag": "0003_sturdy_the_initiative",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784772362758,
+      "tag": "0004_kind_sphinx",
+      "breakpoints": true
     }
   ]
 }

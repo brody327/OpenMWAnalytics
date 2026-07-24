@@ -5,6 +5,7 @@ import express, {
   type NextFunction,
 } from 'express';
 import { ingest } from './events/ingest.js';
+import { listEvents, listMods } from './events/list.js';
 import { requireIngestToken } from './events/auth.js';
 import { confrontations } from './stats/confrontations.js';
 import { friction } from './stats/friction.js';
@@ -21,6 +22,11 @@ app.get('/health', (_req: Request, res: Response) => {
 // Ingestion. Authenticated: this is the only WRITE path, and deployment put it on the
 // public internet. The read side below stays deliberately open (see events/auth.ts).
 app.post('/events', requireIngestToken, ingest);
+
+// Raw event feed (the explorer). Same path as ingest, different verb: POST writes events,
+// GET reads them back. Read side, so it is open like /stats/*.
+app.get('/events', listEvents);
+app.get('/mods', listMods);
 
 // Query / read side (aggregations for the dashboard).
 app.get('/stats/confrontations', confrontations);

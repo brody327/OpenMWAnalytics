@@ -125,3 +125,70 @@ flooding the endpoint; payload caps and idempotent upsert blunt it, volume does 
 - Query endpoints (aggregates for the dashboard) → own section once `07` starts.
 - Rate limiting, API versioning path (`/v1`) — noted, not MVP.
 - Structured request logging / observability → later.
+
+---
+
+## Read side: the raw event feed (added 2026-07-23)
+
+Two endpoints behind the event explorer (`07 §6`). Both are read-side and therefore **open**,
+like `/stats/*`; only `POST /events` is authenticated.
+
+### `GET /events`
+
+Filters (all optional, all AND-ed): `mod_id`, `type`, `env`, `session_id`, plus the promoted
+payload columns `suspect`, `topic`, `reason`. Time bounds `from`/`to` are **epoch ms on `ts`
+(event time)**, matching the wire contract — the explorer answers *"what happened when"*, not
+*"what did we ingest when"*.
+
+**Payload filters are an ALLOW-LIST**, not arbitrary `data->>?`. An unindexed JSONB predicate
+over 1M rows is a sequential scan per request; letting the caller choose the predicate makes the
+endpoint's cost unbounded. A payload key becomes filterable by being *promoted to a column*
+(`06 §3`), which is a deliberate act with a measurable cost, not a query-string parameter.
+
+**Pagination is KEYSET (seek), not OFFSET.** Measured on 1M rows, both plans using the same
+`events_feed_idx`:
+
+| | rows read | time |
+| --- | --- | --- |
+| keyset page N | 50 | **~0.14 ms** |
+| `LIMIT 50 OFFSET 500000` | **500,050** | ~218 ms (~1,500x, linear in offset) |
+
+A B-tree has no rank statistic, so *there is no seeking to the Nth row* — an index cannot rescue
+`OFFSET`. **The correctness argument matters more than the speed one:** `events` is append-only
+and this feed is newest-first, so rows arrive at the top. `OFFSET` is anchored to a **count**,
+which means something different between two page fetches — page 2 re-shows rows already seen. A
+cursor is anchored to a **position**.
+
+Contract details, each load-bearing:
+
+- The cursor is the `(ts, session_id, seq)` tuple, base64'd and **opaque by design** — callers
+  cannot do arithmetic on it, so the sort key stays changeable later.
+- `(ts, session_id, seq)` is a **total order**. `ts` alone ties constantly, and a
+  non-deterministic tie-break makes pages overlap or skip regardless of technique.
+- The query fetches `limit + 1` to detect a further page, so there is **no `COUNT(*)`** over the
+  filtered set — an exact total is the expensive half of pagination and an infinite feed needs none.
+- `nextCursor: null` is an **explicit terminator**. Clients must not infer exhaustion from a short
+  page, which is wrong whenever a page lands exactly on the boundary.
+- An invalid cursor is **400**, not a silent page 1 — the latter restarts a feed from the top and
+  reads to the user as duplicated data.
+
+### `GET /mods`
+
+The registry plus live event/session counts per mod. Counts are computed at read rather than
+denormalised onto `mods`: it is a small indexed group-by, and a stored counter would need
+maintaining on every ingest for a number nothing reads on the hot path.
+
+### Envelope change: `mod_id`
+
+`mod_id` is **optional** in the Zod envelope, making this an additive, backward-compatible change
+— an older emitter that omits it still validates, which is why `v` stays `1` (see `02 §2a`).
+
+It is **not** regex-validated in Zod. A malformed id normalises to `'unknown'` at ingest rather
+than 400-ing the batch: the id is metadata about the event, and losing real telemetry over a bad
+label is the worse failure — the same posture as `env` falling back to `'prod'`. The API
+re-validates the format even though the Lua SDK already does, because the emitter runs inside
+another author's mod; **the trust boundary is here, not there.**
+
+Ingest also **auto-registers** every mod id in a batch (one upsert, deduped in JS), after the
+event insert and deliberately outside it: the registry is derived convenience, and failing to
+refresh a `last_seen_at` must never cost us events.

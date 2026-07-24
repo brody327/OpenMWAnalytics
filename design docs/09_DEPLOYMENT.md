@@ -295,3 +295,19 @@ Generate a real migration baseline (`npm run db:generate`), commit it, and run
 `drizzle-kit migrate` as a **k8s Job or an init container** before the Deployment rolls. That
 turns the checklist above into something the pipeline enforces instead of something a human
 remembers. Until then, treat every `schema.ts` change as a manual RDS change too.
+
+### ⚠️ Known gap: the CronJob can outrun the migration
+
+The initContainer guarantees ordering **for the API pod only**. `cronjob-friction-rollup.yaml`
+pulls the same `:latest` tag independently, so after a push the fold job can start on the new
+image *before* the Deployment has rolled and applied migrations. If a fold ever needs a table
+the migration has not created yet, that tick fails.
+
+It **self-heals** — the next tick runs after the rollout — and `backoffLimit: 2` plus visible Job
+failures mean it is loud rather than silent. Observed as a latent risk on 2026-07-22, not as an
+incident.
+
+Proper fixes, in ascending order of effort: pin both manifests to an immutable `:<sha>` tag and
+roll them together (also fixes the traceability caveat already noted on the Deployment); or run
+migrations as a pre-deploy Job that both workloads wait on; or have the fold no-op cleanly when
+its schema is not yet present. Not urgent while the fold is the only scheduled workload.

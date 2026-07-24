@@ -1,0 +1,1 @@
+CREATE INDEX "events_feed_idx" ON "events" USING btree (ts desc,session_id desc,seq desc);
