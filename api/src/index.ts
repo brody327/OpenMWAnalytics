@@ -10,6 +10,7 @@ import { requireIngestToken } from './events/auth.js';
 import { confrontations } from './stats/confrontations.js';
 import { friction } from './stats/friction.js';
 import { skills } from './stats/skills.js';
+import { ranking } from './stats/ranking.js';
 
 const app = express();
 app.use(express.json());
@@ -32,6 +33,7 @@ app.get('/mods', listMods);
 app.get('/stats/confrontations', confrontations);
 app.get('/stats/friction', friction);
 app.get('/stats/skills', skills);
+app.get('/stats/ranking', ranking);
 
 // Central error handler (Express 5 forwards async rejections here).
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

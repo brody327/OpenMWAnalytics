@@ -3,6 +3,65 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-24 — Shrinkage / Bayesian smoothing (Phase 4a ranking, kickoff)
+
+Opened Phase 4a — *rank the dashboard* ("where are players most stuck," look-here-first).
+Chose option A (rank on difficulty = shrunk failure rate × volume) over option B (fold in
+post-failure behaviour) — build the scoring spine first, layer §3.1 behaviour later. Learner
+asked to be taught **shrinkage** properly before designing the formula.
+
+**Assessment types used:** prediction, explain-back (no multiple choice).
+
+**Break point found via prediction.** First prediction — "m: 10 → 3 on a 1-attempt/1-fail
+topic, rate up or down?" — learner was directionally right ("up") but reported honestly: *"I
+don't really get what m is… is it just an arbitrary number? I don't get what it's doing there."*
+That was the real gap: **the meaning of the pseudo-count `m`**, not the arithmetic.
+
+**Re-taught with a changed representation (protocol §4):**
+- Dropped the formula, used the **review analogy** — `m` = how many imaginary *average* reviews
+  you pad a 1-review restaurant with before trusting it. Named it a **tuning knob we own**, units
+  = attempts, not arbitrary.
+- **The dial table** (topic X, m = 0/1/3/10/50) did the real work: `m=0` = no shrinkage / pure
+  raw, `m=∞` = everything becomes the global average, every real `m` in between. This directly
+  answered "what is m doing there."
+
+**Explain-back — clean pass.** "Why does a 200-attempt topic barely move on the `m` dial while a
+1-attempt one swings?" → learner: *"the m effect on X is so heavy because there's such a lack of
+sample; more sample and it'd be more stable and wouldn't tune as much."* Correctly located it as
+**`m` relative to `n`**, not `m` alone — the tug-of-war framing. Shrinkage landed.
+
+**Also corrected:** learner floated the shrunk rate could exceed 1 — clarified it's a weighted
+average of `r` and `C`, so it's bounded between them; a rate > 1 would be a bug.
+
+**Volume half taught + landed.** Why volume at all (triage by impact, not just difficulty) and
+linear vs. damped: chose `shrunk_rate × log(attempts)`. Break-point-lite moment on `log(1)`:
+learner guessed a 1-attempt topic scores "≈ its shrunk rate"; corrected to `log(1) = 0` → score
+exactly 0, and *why* that is the design goal (noise hit by both terms at once).
+
+**Final assessment — clean 3/3 prediction on a hand-computable fixture (no MC).** Built
+`stats/ranking.ts` (pure `rankTopics(rows, m)` + thin handler reusing the index-only byTopic
+scan) + `GET /stats/ranking` + `ranking.test.ts` (Node built-in runner). Gave the learner the
+3-row fixture (C = 0.5, m = 10) and asked for C / full order / noise's exact score. Learner:
+**C = 0.5 ✓, order 1→3→2 ✓ (incl. the subtle brutal-popular > easy-popular at similar volume),
+noise = 0 ✓.** The heuristic (shrinkage + log-damped volume) is solid. Code green: tsc + 5/5 tests.
+
+**Dashboard view SHIPPED same session (4a fully closed).** `RankingList.tsx` — a pure Server
+Component (no 'use client', no Recharts), rendered first on /mods/ccff as "Where players are most
+stuck". Teaching points landed in the build: (1) a ranked list that EXPOSES the ingredients (n,
+raw→adjusted fail rate side by side = shrinkage visibly at work) beats a bar chart of the
+composite score, which would hide the why (doc 10 §2/§3.3); (2) you don't reach for a charting
+lib for ordered-data-plus-a-bar — a CSS width meter in a Server Component ships zero JS and the
+drill-downs stay URL-as-state; (3) single-hue magnitude meter from the same validated blue ramp
+as FrictionCharts, theme-aware via `dark:` (no matchMedia). Data layer: `getRankingStats()` +
+snapshot capture, same live/snapshot/unavailable degradation contract as the other three.
+**Verified:** api tsc + 5/5 tests, dashboard tsc + `next build` clean, and SSR'd /mods/ccff
+against the live local API (globalFailRate 0.7486, meters descending 100%→90.1%→… correctly, 200
+no errors). Synthetic local data is all high-n so raw≈adjusted — the shrinkage GAP is proven by
+the unit-test fixture, not visible here.
+
+**Next:** doc updates (05/07/10 via /update-docs) + commit, then Phase 4b (pgvector hybrid
+search — AI eng + the Postgres perf core qual in one thread).
+
 ## 2026-07-23 — React fundamentals: the render model + the server/client boundary (dashboard)
 
 Learner asked (end of prior session) to pause feature work and learn to *read* the

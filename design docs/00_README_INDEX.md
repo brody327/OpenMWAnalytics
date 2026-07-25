@@ -15,7 +15,7 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `04_SHIPPER_DESIGN.md` | The Node log-tailing shipper: offset tracking, truncation handling, batching, retries, at-least-once; operating it. | ✅ reliability pass done 2026-07-18 (durable offset, relaunch detection, at-least-once); §5 adds the first-run EOF trap + recovery |
 | `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested; read side adds `GET /events` (keyset) + `GET /mods` 2026-07-23 |
 | `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented |
-| `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes; offline degradation. | 🟢 **live at `omwanalytics.com`**; + event explorer, nav, aggregate→explorer drill-down (2026-07-23, not yet deployed) |
+| `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes; offline degradation. | 🟢 **live at `omwanalytics.com`**; + event explorer, nav, drill-down (2026-07-23) + **stuck-ranking view** `GET /stats/ranking` (§7, 2026-07-24) — both **not yet deployed** |
 | `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ⚠️ SDK is now a FACTORY (`require(...)(modId)`, breaking, 2026-07-23) — **not yet verified in-game**; auto path still open |
 | `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**; + migrations run as an initContainer and a CronJob folds the rollups (2026-07-22) |
 | `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20 |
@@ -99,7 +99,10 @@ ingest authenticated. Remaining threads:
 - **Milestone / progression events** (`10` Module 4) — completion funnel (4.2), pacing (4.3).
 - **`SkillProgression` engine event** (`03` + `08`) — proves the **passive/auto**
   instrumentation path (engine hook, no mod cooperation); all current work is manual.
-- **Search / ranking / pgvector** — the AI-engineering thread, unstarted. Needs data.
+- **Search / ranking / pgvector** — the AI-engineering thread (Phase 4). ✅ **4a done
+  2026-07-24**: stuck-ranking heuristic (`GET /stats/ranking` + view, `07 §7`) — the "ranking
+  brought to bear on how the tool works" angle, no new data. ▶ **4b next: pgvector hybrid
+  search** (AI eng + the Postgres perf core qual in one thread), then 4c LLM insights.
 - `bestAny` (a passive check where *every* stat is below the awareness floor) is
   implemented but still unexercised in game.
 - ✅ ~~`03` follow-ups — retire the `Spike*`/`Heartbeat` placeholders + reconcile

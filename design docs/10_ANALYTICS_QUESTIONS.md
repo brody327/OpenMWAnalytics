@@ -129,13 +129,23 @@ view) · ❌ needs new events.
 
 | # | Question | Decision it informs | Metric | Events required | Have? |
 | --- | --- | --- | --- | --- | --- |
-| 1.1 | Which content has the highest failure rate? | where to look first | pass rate by topic / check, **with n** | `ConfrontationAttempted` | 🟡 |
+| 1.1 | Which content has the highest failure rate? | where to look first | ranked **stuck score** (shrunk fail rate × log volume), with n | `ConfrontationAttempted` | ✅ |
 | 1.2 | *How badly* do players fail — by a hair or by a mile? | tune threshold vs. redesign | distribution of **margin** (`skill_value − threshold`) | `SkillCheckResolved` | 🔵 designed |
 | 1.3 | How many attempts precede a success? | is it deduction or brute force | attempts-to-first-pass, per player per check | existing (`ROW_NUMBER`) | ✅ API |
 | 1.4 | What do players do *after* failing? | good friction vs. bad friction (§3.1) | next-event distribution after a fail | existing (`LEAD`) | ✅ API |
 | 1.5 | Which failure *modes* dominate? | fix the specific confusion | `reason` breakdown | `ConfrontationAttempted.reason` | ✅ |
 | 1.6 | Is anything effectively unpassable? | unwinnable-state bug hunt | checks with 0 passes and n ≥ threshold | existing | ✅ API |
 | 1.7 | Do players who quit on a topic ever come back and beat it? | is `session_end` churn, or just bedtime | per **install**: topics with ≥1 unsolved session *and* ≥1 solved session | existing (`install_id`) | 🟡 query proven, no view |
+
+**Why 1.1 is now ✅ (the ranking view, 2026-07-24 — Phase 4a).** "Where to look first" is not a
+metric, it is an *ordering* — so answering it well needs a scoring function, not another bar
+chart. `GET /stats/ranking` ranks every topic by an explicit **stuck score** = shrunk fail rate ×
+log(attempts): shrinkage pulls a thin rate toward the global `C` so a topic failed once cannot
+outrank one failed forty times, and log-damped volume makes a single attempt score zero. It is a
+deliberate **heuristic, not a model** — the honest choice at n=1, where there are no labels to
+learn from (`§3.3`). Crucially this **dissolves the population-of-one objection**: ranking what a
+tool *shows* needs a scoring function, not a user population. Full design + verification state in
+`07 §7`. ⚠️ Numbers stay anecdote until real players exist, like every rate here.
 
 **Why 1.7 exists — it reinterprets 1.4's loudest signal.** `session_end` is currently our
 *worst* post-failure bucket (§3.1), but it is ambiguous: "rage-quit for good" and "it was

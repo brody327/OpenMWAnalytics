@@ -120,12 +120,46 @@ export type SkillResult = {
   error: string | null;
 };
 
+/** One scored + ranked topic (design docs 07 / api stats/ranking.ts). Every ingredient of the
+ *  score rides along so the UI can EXPLAIN the ordering rather than show a bare number. */
+export type RankedTopic = {
+  suspect: string;
+  topic: string;
+  /** = n. The sample size, carried out front for the §3.3 honesty rule. */
+  attempts: number;
+  fails: number;
+  /** fails / attempts — shown only for contrast with the shrunk value. */
+  raw_fail_rate: number;
+  /** the shrinkage-tamed rate the ranking actually trusts. */
+  shrunk_fail_rate: number;
+  /** log(attempts) — the exposure weight. */
+  volume_weight: number;
+  /** shrunk_fail_rate × volume_weight — the sort key. */
+  stuck_score: number;
+};
+
+export type RankingStats = {
+  /** measured global fail rate C, the target shrinkage pulls thin rates toward. */
+  globalFailRate: number;
+  /** the prior strength m (the one knob), echoed so the ranking stays self-explaining. */
+  priorStrength: number;
+  ranked: RankedTopic[];
+};
+
+export type RankingResult = {
+  stats: RankingStats;
+  source: 'live' | 'snapshot' | 'unavailable';
+  capturedAt: string | null;
+  error: string | null;
+};
+
 const snapshot = snapshotJson as {
   capturedAt: string | null;
   byTopic: TopicStat[];
   byReason: ReasonStat[];
   friction?: FrictionStats;
   skills?: SkillStats;
+  ranking?: RankingStats;
 };
 
 const API_BASE = process.env.OMWA_API_BASE ?? 'http://localhost:4000';
@@ -198,6 +232,30 @@ export async function getSkillStats(): Promise<SkillResult> {
     const fallback = snapshot.skills;
     return {
       stats: fallback ?? { byCheck: [], failureDistance: [], byStat: [], byRoute: [] },
+      source: fallback ? 'snapshot' : 'unavailable',
+      capturedAt: fallback ? snapshot.capturedAt : null,
+      error: (e as Error).message,
+    };
+  }
+}
+
+// The "where are players most stuck — look here first" ranking (design docs 07 / 10 Q1.1).
+// Same degradation contract as getSkillStats: a snapshot predating this endpoint reports
+// 'unavailable' rather than passing an empty ranking off as a real reading. The empty-fallback
+// keeps priorStrength: 0 so a snapshot-less render never implies a knob value it did not use.
+export async function getRankingStats(): Promise<RankingResult> {
+  try {
+    const res = await fetch(`${API_BASE}/stats/ranking`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`ranking API responded ${res.status}`);
+    const stats = (await res.json()) as RankingStats;
+    return { stats, source: 'live', capturedAt: null, error: null };
+  } catch (e) {
+    const fallback = snapshot.ranking;
+    return {
+      stats: fallback ?? { globalFailRate: 0, priorStrength: 0, ranked: [] },
       source: fallback ? 'snapshot' : 'unavailable',
       capturedAt: fallback ? snapshot.capturedAt : null,
       error: (e as Error).message,

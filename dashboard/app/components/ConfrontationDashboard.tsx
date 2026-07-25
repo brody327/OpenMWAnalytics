@@ -11,10 +11,16 @@
 // understand gets the envelope-level summary the mod page already shows, not this.
 
 import Link from 'next/link';
-import { getConfrontationStats, getFrictionStats, getSkillStats } from '../lib/stats';
+import {
+  getConfrontationStats,
+  getFrictionStats,
+  getSkillStats,
+  getRankingStats,
+} from '../lib/stats';
 import { PassRateChart, FailureReasonChart } from './ConfrontationCharts';
 import { AfterFailureChart } from './FrictionCharts';
 import { MarginChart } from './SkillCharts';
+import { RankingList } from './RankingList';
 
 // This dashboard is CCFF-specific; the id scopes the drill-down links into the explorer.
 const MOD_ID = 'ccff';
@@ -52,10 +58,11 @@ const whenCaptured = (iso: string | null) =>
 export async function ConfrontationDashboard() {
   // Two independent endpoints, fetched concurrently: neither depends on the other, and
   // each degrades on its own, so one being down must not blank the other.
-  const [{ stats, source, capturedAt, error }, friction, skills] = await Promise.all([
+  const [{ stats, source, capturedAt, error }, friction, skills, ranking] = await Promise.all([
     getConfrontationStats(),
     getFrictionStats(),
     getSkillStats(),
+    getRankingStats(),
   ]);
 
   const byTopic = stats.byTopic;
@@ -73,6 +80,45 @@ export async function ConfrontationDashboard() {
           <span className="mt-1 block text-xs opacity-70">{error}</span>
         </div>
       )}
+
+      {/* Look here first. A RANKED triage lens over everything below — not a report of the data
+          but a judgement about which content deserves attention, from an explicit scoring
+          function (design docs 10 Q1.1). It fetches independently, so it states its own
+          provenance and degrades on its own. */}
+      <section className="mb-14">
+        <h2 className="text-2xl font-semibold tracking-tight">Where players are most stuck</h2>
+        <p className="mt-2 max-w-2xl text-zinc-600 dark:text-zinc-400">
+          Every topic, ranked by a single <em>stuck score</em> so the content that most deserves
+          a look sits at the top — high failure that players actually ran into, not a scary
+          percentage over one unlucky attempt.
+        </p>
+
+        {ranking.source === 'unavailable' ? (
+          <div className="mt-6 rounded-lg border border-black/10 bg-black/[0.02] px-4 py-3 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400">
+            The ranking endpoint is unreachable and no saved snapshot covers it yet, so there is
+            nothing to rank right now.
+            <span className="mt-1 block text-xs opacity-70">{ranking.error}</span>
+          </div>
+        ) : (
+          <>
+            <StaleNotice source={ranking.source} capturedAt={ranking.capturedAt} />
+            <Card title="Ranked by stuck score" subtitle="Highest first — start at the top">
+              <RankingList data={ranking.stats.ranked} modId={MOD_ID} minConfidentN={MIN_CONFIDENT_N} />
+              <p className="mt-4 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                <strong className="font-medium text-zinc-700 dark:text-zinc-300">
+                  How this is ranked.
+                </strong>{' '}
+                Stuck score = <em>adjusted</em> failure rate × attempt volume (log-damped). The
+                adjusted rate pulls each topic toward the overall failure rate of{' '}
+                {pct(ranking.stats.globalFailRate)} by an amount that fades as attempts accrue
+                (strength ≈ {ranking.stats.priorStrength} attempts) — so a topic failed once can’t
+                outrank one failed forty times, and a single attempt scores zero. It is a
+                deliberate, inspectable heuristic, not a model.
+              </p>
+            </Card>
+          </>
+        )}
+      </section>
 
       <section>
         <h2 className="text-2xl font-semibold tracking-tight">Confrontations</h2>
