@@ -1,7 +1,10 @@
 # Local Postgres for development. Disposable: `docker compose down -v` wipes it.
 services:
   db:
-    image: postgres:16
+    # postgres:16 + the pgvector extension available (NOT installed -- the migration
+    # runs CREATE EXTENSION, same as it will in prod). Same PG16 data directory, so
+    # switching to this image does not require recreating the volume.
+    image: pgvector/pgvector:pg16
     container_name: omwanalytics-db
     restart: unless-stopped
     environment:

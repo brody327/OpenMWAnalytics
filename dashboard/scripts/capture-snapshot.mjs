@@ -50,6 +50,7 @@ async function optional(path) {
 
 const friction = await optional('/stats/friction');
 const skills = await optional('/stats/skills');
+const ranking = await optional('/stats/ranking');
 
 const payload = {
   capturedAt: new Date().toISOString(),
@@ -57,6 +58,7 @@ const payload = {
   byReason,
   ...(friction && { friction }),
   ...(skills && { skills }),
+  ...(ranking && { ranking }),
 };
 await writeFile(OUT, JSON.stringify(payload, null, 2) + '\n', 'utf8');
 console.log(
@@ -65,5 +67,6 @@ console.log(
       ? ` / ${friction.afterFailure?.length ?? 0} after-failure + ${friction.attemptsToPass?.length ?? 0} attempts rows`
       : ' / no friction data') +
     (skills ? ` / ${skills.byCheck?.length ?? 0} skill-check rows` : ' / no skills data') +
+    (ranking ? ` / ${ranking.ranked?.length ?? 0} ranked topics` : ' / no ranking data') +
     ` from ${API_BASE}`,
 );

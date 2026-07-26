@@ -386,3 +386,82 @@ navigate, seed the store, then reconcile whatever filters were already there.
 Verified via SSR HTML: nav on both routes with exactly one `aria-current="page"`; 35 drill-down
 links on `/`; following one returns 50 rows, all `ccff`, all `ConfrontationAttempted`.
 ⚠️ **Not visually eyeballed** — no browser available.
+
+---
+
+## 7. Ranking — "where players are most stuck" (`GET /stats/ranking`, 2026-07-24)
+
+**Question:** *where should the author look first?* (`10` Q1.1). Built 2026-07-24 — **API +
+dashboard view both shipped.** This is Phase 4a, and it is a different *kind* of view from
+everything above: §3–§5 **report** the data faithfully; this one makes a **judgement** — it
+ranks topics by how much they deserve attention, from an explicit scoring function.
+
+### The scoring function (a heuristic, deliberately not a model)
+
+```
+stuck_score = shrunk_fail_rate × log(attempts)
+shrunk_fail_rate = (fails + m·C) / (attempts + m)
+```
+
+Two terms, two jobs. **Shrinkage** (`shrunk_fail_rate`) decides *whether to trust the rate*: a
+raw rate over a tiny sample is noise wearing a confident hat (1 attempt / 1 fail = "100%"), so
+each rate is pulled toward the measured global fail rate `C` by an amount that fades as the
+sample grows — an extreme rate must be *earned* with volume. `m` (the prior strength, in units
+of attempts; env `OMWA_RANK_PRIOR_M`, default 10) is the crossover point where a topic's own
+data and the global prior weigh equally. **`log(attempts)`** decides *how much the trusted rate
+matters* — "look here first" is triage, so exposure counts; `log` (not raw attempts) so sheer
+popularity can't bury a savage-but-moderately-played topic, and `log(1) = 0` makes a single
+attempt score **exactly zero**. Both defences fire on noise at once: its rate is shrunk toward
+average *and* its volume weight is ~0.
+
+**Why a heuristic, not ML:** no labels (nothing has ever been tagged "stuck") and a population
+of one (`10 §3.3`) — there is nothing honest for a model to learn. Every term is inspectable and
+defensible, which is the point of leading Phase 4 with ranking rather than an LLM.
+
+### The pure-function / handler split
+
+`api/src/stats/ranking.ts` keeps the entire heuristic (`C`, shrinkage, `log`, sort) in a **pure
+`rankTopics(rows, m)` function** — no DB, no I/O — and the handler is a thin wrapper that feeds it
+rows. Two payoffs: the scoring *rule* is the portfolio-legible part and is **unit-tested on a
+hand-computable 3-row fixture** (`ranking.test.ts`, Node's built-in runner, 5/5) whose headline
+assertion is that **the topic with the highest raw failure rate ranks dead last**; and the ranker
+is testable with no database. `C` is computed from the *same rows the handler already fetched* —
+summing them **is** the global aggregate — so there is no second query.
+
+**No new SQL, no new index.** The handler reuses the exact index-only `byTopic` GroupAggregate
+`/stats/confrontations` already tuned (`events_confrontation_cols_idx` over the stored
+`suspect`/`topic`/`passed` generated columns — see `06`). `GET /stats/ranking` →
+`{ globalFailRate, priorStrength, ranked[] }`; each `ranked` row carries every ingredient
+(`attempts`, `fails`, `raw_fail_rate`, `shrunk_fail_rate`, `volume_weight`, `stuck_score`) so the
+UI can *explain* the order rather than show a bare number.
+
+### The view (`RankingList.tsx`)
+
+First section on `/mods/ccff`, above Confrontations — "look here first" goes first.
+
+- **A pure Server Component — no Recharts, no `'use client'`.** It is ordered data with a
+  proportional bar, which a Server Component + a CSS width does better than a charting library:
+  zero JS shipped, and the drill-downs stay plain `<Link>`s (URL-as-state, like the friction
+  table). You reach for Recharts for an interactive plot; a ranked list is not that.
+- **A ranked list that exposes the ingredients, not a bar chart of the score.** The score is a
+  *composite*; a bare bar would hide *why* a row ranks where it does. The row shows `n` and
+  **raw → adjusted fail rate side by side** — shrinkage visibly at work (a thin extreme rate
+  dragged back toward `C`; a well-supported row barely moves). Doc `10 §2` (every view ends in a
+  decision) and `§3.3` (sample size beside every rate) in one layout.
+- **The meter** encodes `stuck_score` *relative to the top row* (a scan, not an absolute scale);
+  single-hue magnitude bar from the same validated blue ramp as `FrictionCharts` (page reads as
+  one system), theme-aware via `dark:` — **no `matchMedia`**, because a Server Component has no
+  client hooks and needs none for a CSS colour. Text stays in ink tokens, never the bar colour.
+- **Degradation:** `getRankingStats()` fetches concurrently (`Promise.all`) with the same
+  `live | snapshot | unavailable` contract as friction/skills; the snapshot script captures
+  `/stats/ranking` too but is not allowed to fail on it (a deployed API may predate it).
+
+### Verification state (2026-07-24)
+
+API `tsc` + **5/5 tests**; dashboard `tsc` + `next build` clean (`/mods/[modId]` stays `ƒ`);
+**SSR'd `/mods/ccff` against the live local API** — `globalFailRate 0.7486`, meters descending
+`100% → 90.1% → 89.7% …`, `200`, no errors. ⚠️ **Two honest limits:** the local dataset is
+synthetic and **all high-`n`, so raw ≈ adjusted there** — the shrinkage *gap* is proven by the
+unit-test fixture, **not visible in this data**; and it was **not visually eyeballed** (no
+browser), verified by SSR HTML only, like §6. **Not yet deployed**, and the number is not
+meaningful until real players exist (`10 §3.3`).

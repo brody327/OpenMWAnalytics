@@ -102,6 +102,42 @@ Without exposure:
 **Structural consequence:** the highest-leverage *new* event class is exposure, not
 more attempt detail.
 
+#### 3.2a — A mechanism for exposure, identified 2026-07-25 (designed nowhere yet)
+
+The claim *"you cannot emit an event for something that didn't happen"* is true and was too
+strong a conclusion. **You can emit one for the bounded window in which the non-event occurred,
+provided the choice set is enumerable** — which is exactly what CCFF's **inspect panel** is:
+
+```
+panel opened  →  the available skill checks are enumerable  →  panel closed
+                 whatever was not attempted was DECLINED
+```
+
+That is the standard **impression → action** pattern, and it supplies the denominator this
+section says we lack. The prize is the 2×2:
+
+| | attempted | **declined** |
+| --- | --- | --- |
+| **threshold met** | routine | didn't want the outcome |
+| **threshold not met** | failure prose is **read** | **deterred — prose never seen** |
+
+⚠️ **Four things to settle before designing it** (feasibility gate first):
+
+1. **Does the panel code know, at open time, which checks exist *and* whether the threshold is
+   met?** A code read decides whether the full 2×2 is buildable or only the top row.
+2. **Grain is per-check, not per-panel** — 3 checks with 1 attempt = 1 attempt + **2** declines.
+3. **Dedupe repeat opens** (probably first-open-per-session) or the decline rate inflates.
+4. **Name the field `check_displayed`, not `check_seen`** — rendered ≠ read. Put the viewability
+   limitation in the schema, not in a footnote.
+
+⭐ **This also fixes a blind spot in 4a's ranking** (`07 §7`): `stuck_score` uses `attempts` as its
+volume term, so a check nobody attempts scores ≈ 0 — indistinguishable from one that doesn't
+exist. Exposure separates *"everyone fails this"* from *"nobody even tries this"*, which are
+different problems with different fixes.
+
+Status: **mechanism identified, nothing designed or built.** Module 2 below remains unanswerable
+today; it is no longer unanswerable *in principle*.
+
 ### 3.3 Honesty about sample size
 
 The current population is **one player, who is also the author**. Rates over n=1 are
@@ -129,13 +165,23 @@ view) · ❌ needs new events.
 
 | # | Question | Decision it informs | Metric | Events required | Have? |
 | --- | --- | --- | --- | --- | --- |
-| 1.1 | Which content has the highest failure rate? | where to look first | pass rate by topic / check, **with n** | `ConfrontationAttempted` | 🟡 |
+| 1.1 | Which content has the highest failure rate? | where to look first | ranked **stuck score** (shrunk fail rate × log volume), with n | `ConfrontationAttempted` | ✅ |
 | 1.2 | *How badly* do players fail — by a hair or by a mile? | tune threshold vs. redesign | distribution of **margin** (`skill_value − threshold`) | `SkillCheckResolved` | 🔵 designed |
 | 1.3 | How many attempts precede a success? | is it deduction or brute force | attempts-to-first-pass, per player per check | existing (`ROW_NUMBER`) | ✅ API |
 | 1.4 | What do players do *after* failing? | good friction vs. bad friction (§3.1) | next-event distribution after a fail | existing (`LEAD`) | ✅ API |
 | 1.5 | Which failure *modes* dominate? | fix the specific confusion | `reason` breakdown | `ConfrontationAttempted.reason` | ✅ |
 | 1.6 | Is anything effectively unpassable? | unwinnable-state bug hunt | checks with 0 passes and n ≥ threshold | existing | ✅ API |
 | 1.7 | Do players who quit on a topic ever come back and beat it? | is `session_end` churn, or just bedtime | per **install**: topics with ≥1 unsolved session *and* ≥1 solved session | existing (`install_id`) | 🟡 query proven, no view |
+
+**Why 1.1 is now ✅ (the ranking view, 2026-07-24 — Phase 4a).** "Where to look first" is not a
+metric, it is an *ordering* — so answering it well needs a scoring function, not another bar
+chart. `GET /stats/ranking` ranks every topic by an explicit **stuck score** = shrunk fail rate ×
+log(attempts): shrinkage pulls a thin rate toward the global `C` so a topic failed once cannot
+outrank one failed forty times, and log-damped volume makes a single attempt score zero. It is a
+deliberate **heuristic, not a model** — the honest choice at n=1, where there are no labels to
+learn from (`§3.3`). Crucially this **dissolves the population-of-one objection**: ranking what a
+tool *shows* needs a scoring function, not a user population. Full design + verification state in
+`07 §7`. ⚠️ Numbers stay anecdote until real players exist, like every rate here.
 
 **Why 1.7 exists — it reinterprets 1.4's loudest signal.** `session_end` is currently our
 *worst* post-failure bucket (§3.1), but it is ambiguous: "rage-quit for good" and "it was
@@ -217,6 +263,12 @@ The module authors most consistently underestimate, and the one with the highest
 | 2.2 | Of players who reach X, how many engage? | is the hook working | engaged ÷ exposed | `ConfrontationTopicEntered` ÷ `ConfrontationAttempted` | 🔵 designed |
 | 2.3 | Which optional/alternate routes get used? | is the branching worth it | route share | exposure + route id | ❌ |
 | 2.4 | Do players find the evidence needed for a check they failed? | discovery problem vs. reasoning problem | possession-at-attempt | `EvidenceCollected` × `ConfrontationAttempted.evidence_ids` | 🔵 designed |
+| 2.5 | **Is the bespoke failure prose ever read?** | **where to spend authoring bandwidth** | declined ÷ displayed, split by threshold-met (§3.2a's 2×2) | inspect-panel exposure event (**not designed**) | ❌ |
+
+**2.5 is new (2026-07-25, learner's question) and is the most unusual question in the inventory** —
+it is about where to spend *human effort*, not where players struggle. If players who cannot pass a
+check mostly never attempt it, the hand-written failure branches are largely unread and that
+bandwidth belongs elsewhere. Blocked on §3.2a's exposure mechanism.
 
 **2.4 is the sharpest question in this module.** A failed confrontation where the
 player never found the required evidence is a *discovery* bug; the same failure with

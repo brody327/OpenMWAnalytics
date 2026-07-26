@@ -3,6 +3,334 @@
 A running record of concepts taught and quiz results, so we can revisit weak spots.
 Newest first.
 
+## 2026-07-26 — 4b refresher round 1 (1.5/4), then verification + schema BUILT
+
+Opened with the **proportional** refresher the learner asked for: 12 unassessed concepts from
+07-25, planned as 3 rounds of 4 rather than a reflex 3 questions. **Round 1 scored 1.5/4**, round
+2 scored worse, and the learner stopped and said *"I'm feeling out of depth on this topic"* —
+which was the correct call and the most useful signal of the session. Rounds 2–3 **parked**;
+switched to hands-on build, their demonstrably stronger modality (cf. step 5's psql work).
+
+| # | concept | assessment | result |
+| --- | --- | --- | --- |
+| 1 | embedding = fixed-size fn; cosine = angle | explain-back | ⚠️ **half** — had "angle", missed magnitude *and* the fixed-size property |
+| 2 | Matryoshka truncation | mechanism + prediction | ❌ → taught fresh. **STILL UNASSESSED** |
+| 3 | memory arithmetic | hands-on | ⚠️→✅ computed correctly; **found an error in my rule of thumb** |
+| 4 | HNSW pointer chase ⇒ residency | prediction | ❌ → ✅ landed (clean transfer to the pre-filter path) |
+| 5 | cardinality forces the child table | prediction | ❌ **second miss** — substituted "schema openness" again → re-taught concretely |
+| 6 | JSONB range-predicate false match | debug | ⚠️ good partial, **plus an unprompted real find** (nothing filters `type='ALCH'`) |
+| 7 | local-first ingest topology | explain-back | ✅ reason right (copyright); given the vocabulary |
+| 8 | model-swap idempotency trap | prediction | ❌ **instructively** — see below |
+
+### ⚠️ MY FAILURES, and they compounded
+
+1. **Unexplained jargon again** — `->0` used four times before defining it, and `KNN` never
+   defined at all. The learner said *"I don't know what that zero is even looking at."* Second
+   session running. CLAUDE.md rule, broken the same way.
+2. **I gave two wrong numbers and the learner's arithmetic was the only correct input.** I
+   asserted HNSW ≈ 2× the raw column (really ~1.25×) and `shared_buffers` ≈ 256 MB (measured:
+   **185 MB**). They computed `34,000 × dims × 4` correctly. Worth noting the decision was
+   *robust to being wrong twice in different directions* — 384 wins under every variant.
+3. **Asked them to read a row I'd shown 400 words earlier.** "I can't see the thing, you didn't
+   show it to me" is a layout failure, not a comprehension failure.
+
+### ⭐ The best diagnosis of the session: a correct rule applied in the wrong place (Q8)
+
+Asked to predict a model swap, the learner said *"the ranking would stay the same, they'll just
+see the numbers change."* That is **the log-base lesson from 07-25**, correctly recalled — a
+monotonic rescale cannot change a sort order — imported into a context where it does not hold.
+A model swap is not a rescale; `3-small` and `3-large` produce vectors in unrelated coordinate
+spaces with no mapping between them. This is a *more* encouraging failure than a blank: the rule
+is retained and being reached for, it just lacks a boundary condition. **Re-teach as "when does
+monotonic-invariance apply?" rather than re-teaching the model swap.**
+
+### ⚠️ Confidence gap, THIRD instance
+
+On Q5 the learner said they'd need *"some sort of for loop over it, but I don't know what that
+would be in DDL"*, then abandoned it with *"I'm assuming there isn't one, because why would you
+ask the question if it did exist."* **The for loop is rows; a child table is the loop.** They
+described the answer and disowned it. Same pattern as step 4's content hash and step 6's
+rank-as-currency. Named to them again. This is not a knowledge gap and it will read badly in an
+interview.
+
+### Verification-first (the discipline held, and it paid)
+
+Before writing any code, checked what doc 11 had assumed:
+
+| assumption | reality |
+| --- | --- |
+| RDS permits `CREATE EXTENSION vector`? | ✅ yes — tested in a transaction, **rolled back** |
+| pgvector version | **0.8.2** prod / 0.8.5 local ⇒ iterative index scans exist |
+| `shared_buffers` ≈ 256 MB | ❌ **185 MB**. Every % in 11 §5 understated; 1536's raw column alone = 113% |
+| `maintenance_work_mem` sufficient? | ❌ **64 MB** < the ~65 MB index ⇒ slow on-disk build path |
+
+**Decision on `maintenance_work_mem`: do nothing.** 34,000 rows is tiny; measure before tuning —
+the same judgment as heuristic-before-ML. If it ever matters, `SET` it **session-scoped**, never
+in the parameter group, because autovacuum workers inherit it (3 × 256 MB on a 1 GB box = OOM,
+and on RDS an OOM restarts Postgres). Taught as a *ceiling, not a reservation* — the learner had
+it as a permanently reserved block, and had "builds need more than 256 MB" inverted.
+
+**Bonus hazard, caught by a warning nobody had to read:** swapping to the pgvector image moved
+glibc 2.41 → 2.36, so every text btree was built under different collation rules than it would
+now be searched under — silent wrong answers, on the database we are about to benchmark. Fixed
+with `REINDEX DATABASE` + `REFRESH COLLATION VERSION` (5s). **That is the FIFTH instance of one
+shape this project keeps meeting:** two sides of a transformation that must agree, failing
+quietly when they don't (tsvector config · embedding model · idempotency key · migration
+baselining · collation).
+
+### Built
+
+`game_records` / `game_chunks` / `record_effects` + `0005_game_corpus.sql` with a hand-added
+`CREATE EXTENSION` (drizzle-kit cannot emit one; a fresh DB would fail at the first
+`CREATE TABLE`). Smoke-tested: `tsv` generated `'balmora' 'bribe' 'cosad' 'demand' 'guard'` —
+byte-identical to 11 §9's measured output — and the provenance CHECK **rejected** a vector
+written without its model, so the model-swap trap is now structurally unreachable rather than
+merely documented.
+
+▶ **Still unassessed: 2, 5 (retest), 9, 10, 11, 12.** Do not let the build bury them.
+
+---
+
+## 2026-07-25 (cont.) — Phase 4b designed end-to-end: retrieval, embeddings, hybrid search
+
+A long design session, taught **step-by-step at the learner's explicit request** — *"I want to go
+step by step and really interrogate and teach that process instead of just you doing it"* — because
+retrieval/embeddings is the first domain in this project with **no senior-level prior to build on**.
+Six decisions closed; nothing built. Full design record: **`11_SEARCH_AND_RETRIEVAL.md`**.
+
+**⚠️ MY FAILURE, and the learner caught it.** I opened with four unexplained terms — *corpus*,
+*ANN*, *hybrid*, *recall* — then asked for arithmetic using them. The learner stopped and asked
+*"what is corpus? what does ANN mean? what are we even building?"* That is exactly the behaviour
+the teach skill says to reward (§1: "silence is not agreement"), and exactly the CLAUDE.md rule I
+broke ("explain jargon on first use"). The thread stalled until it was fixed. **The tell was that
+I had produced no questions from the learner for several turns and read it as agreement.**
+
+### Verification-first work (before any design)
+
+- `esmtool.exe` (ships with OpenMW) dumps the corpus: **~31,000 base-game records + ~500 CCFF**.
+- ⚠️ **Killed my own working assumption by checking it.** I was about to design around
+  `ConfrontationAttempted.topic` joining to game text. Grep against the plugin dump:
+  `crime_scene` / `name_at_scene` appear **zero** times — pure Lua constructs. `suspect` joins
+  only by *naming convention* (`titania` → 25 records). `AreaEntered.area` is the one exact key.
+- Learner's own idea (buff attribution) produced a **better** join than any of mine:
+  `ActiveSpell.id` → `SPEL`/`ALCH`/`ENCH` records, exact.
+
+### Assessment log — one per step, learner drove every decision
+
+| step | concept | assessment | result |
+| --- | --- | --- | --- |
+| 1 | **grain / chunking** | transfer | ✅ **strong.** Derived the *inverse* failure I hadn't raised — chunking causes false promotion ("one alchemy paragraph in six doesn't make it an alchemy book") |
+| 2 | storage sizing on a small instance | estimate | ⚠️ **half.** Right instinct (">768 worries me") without the mechanism; didn't attempt the arithmetic and said so |
+| 3a | JSONB vs relational | transfer + debug | ⚠️ **partial.** Picked *schema openness* (a "why it's safe" argument); the structural blocker is **cardinality** — generated columns cannot express one-to-many. Correctly narrowed Q2 to the right two candidates without choosing |
+| 3b | filtered ANN / selectivity | prediction ×3 | ✅ **2 of 3, and the third was instructive** — see below |
+| 4 | idempotency key | design | ⚠️ **had the answer, distrusted it.** Said "are there changes… that feels naive." It is the answer (content hash). Missed the model-swap trap entirely |
+| 5 | `tsvector` config | prediction + **hands-on** | ✅ learner ran the queries in local psql and read the cost correctly |
+| 6 | **score fusion** | derivation | ✅ **derived RRF's core insight unprompted** — "maybe using the position in the list as a normalizing variable" |
+
+### Diagnosed gaps + what was done
+
+**⭐ The strongest teaching moment was step 3b Q3.** Asked whether the HNSW index is worth building
+*at all* if the telemetry-wired query is the selective one, the learner said **no** — correct for
+the premise as stated, and it discards the use case they had themselves argued for two steps
+earlier (the consistency search). Resolution taught: *the vector index exists to serve the human
+search box; the telemetry recommendation path pre-filters and scans exactly.* Being able to say
+**why the index is deliberately not on the flagship feature's hot path** is the portfolio-grade
+version of this decision.
+
+**⚠️ Recurring pattern to watch: the learner reaches the right answer and then distrusts it.**
+Twice today (step 4's content hash, step 6's rank-as-common-currency) they prefaced a correct
+answer with "I'm not sure" / "that feels naive." Named it to them both times. This is a
+*confidence* gap, not a knowledge gap, and it will read very differently in an interview.
+
+**⚠️ I had the wrong emphasis and was corrected.** I proposed that `SkillStat.base` + `.modifier`
+(two fields) answered the skill-check question. Structurally right, **wrong about what matters**:
+the learner's design question is *which vehicle* (potion / spell / enchanted gear), because that
+is the actionable part. Verified `Actor.activeSpells()` supports full attribution. Their pushback
+also produced the best join key in the project. Recorded in
+[[project-next-goal-skill-tracking]].
+
+**⭐ Learner solved a problem I had called unsolvable.** I said avoidance was unobservable
+("can't emit an event for a non-event"). They identified that the **inspect panel is a bounded
+window with an enumerable choice set** — open, checks are known, close without attempting =
+a measured decline. That is the impression→action pattern and the denominator `10 §3.2` was
+missing. Written up as `10 §3.2a` + new question 2.5.
+
+### Concepts taught (for a PROPORTIONAL refresher — see the teach skill's new §2 rule)
+
+Assessed today: grain/chunking · filtered ANN + selectivity · `tsvector` configs · RRF derivation.
+**Taught but NOT yet assessed** — these are the gaps a next-session quiz must cover:
+
+1. what an embedding *is* (deterministic fn, cosine = angle not magnitude)
+2. **Matryoshka truncation** — why 384 dims from a good model beats a weak 384-dim model
+3. the memory arithmetic (`shared_buffers` ≈ 256 MB; HNSW ≈ 2× the column; disk is *not* the constraint)
+4. **HNSW mechanics** — layered proximity graph, skip-list analogy, *pointer chase* ⇒ residency
+5. why *cardinality* (not schema openness) forces the relational child table
+6. the JSONB range-predicate **false-match** trap
+7. local-first ingest topology (2nd time "data trapped on the client")
+8. the **model-swap idempotency trap** + the general rule (key must cover every input)
+9. **symmetric vs correct stemming**; `Ald'ruhn` splits; `phraseto_tsquery` and `<->`
+10. why multiply turns OR into AND
+11. **`k` in RRF ↔ `m` in shrinkage** — the same *shape* of knob
+12. RRF favours **consensus**, and that is a choice, not an inheritance
+
+⚠️ **Standing hazard named a fourth time**: unverified migrations → prod 500; the `ORDER BY`
+output-alias sort (*correct* results, ~2,000× cost); the staleness metric that climbed forever;
+and now the model-swap idempotency trap. **Anything that caches, skips, or short-circuits work
+needs its invalidation key audited against every input.**
+
+### Non-teaching decision recorded
+
+**Synthetic data: approved, with a line.** Volume/demo ✅ (via the existing `env` column, banner,
+no truncate); supporting a finding or training a model ❌ — *volume is not validity*, and more
+synthetic rows make that failure **harder to see**, not easier. See
+[[project-synthetic-data-policy]].
+
+---
+
+## 2026-07-25 — SPACED-RETRIEVAL refresher on the stuck-ranking heuristic (4/4)
+
+Learner-requested opener (asked for at the close of 07-24): a **next-day retrieval check** on the
+ranking material before starting 4b. Prediction / explain-back / transfer / judgment — **no
+multiple choice**, per `.claude/skills/teach` and the false-6/6 precedent. Result **4/4**, and
+unlike a same-session score this one crossed a day boundary, so it is real retention.
+
+| Q | assessment | result |
+| --- | --- | --- |
+| 1 — order a 3-row fixture (A 40/24, B 4/4, C 1/1; m=10, C=0.5) + attribute the mechanism | prediction | order ✅ **A,B,C**; mechanism ❌ |
+| 2 — what is `m`, units, and the 200-vs-3-attempt asymmetry | explain-back | ✅ |
+| 3 — mod author disputes a 1/1 topic ranking last | transfer | ✅ / follow-up mis-specified by me |
+| 4 — "why not just learn the weights?" | judgment | ✅ |
+
+**⚠️ THE REAL GAP (Q1) — one rule doing two jobs.** Learner had a single consolidated rule,
+*"shrinkage protects against small samples, log protects against large ones"*, and so attributed
+the whole ordering to shrinkage. The fixture was built to break exactly that, and it did:
+
+| sort key | order |
+| --- | --- |
+| shrunk rate alone | **B (.643), A (.580), C (.545)** ← *not* the answer |
+| volume weight alone | **A, B, C** ← the answer |
+
+B has the **highest trusted fail rate of the three and still ranks second**; C's shrunk rate
+(.545) sits a hair *below* A's (.580), nowhere near last-place. The log term owns this ordering.
+Correction taught: the two terms answer **"do I believe this rate?"** vs. **"given I believe it,
+how much does it matter?"** — not small-n vs. large-n. And `log(1)=0` is *also* a small-sample
+defense, so the two defenses **overlap** on noise rather than dividing the range neatly.
+
+**It landed immediately** — asked to predict `OMWA_RANK_PRIOR_M=0`, learner predicted "order
+barely changes, the log is still doing the work." ✅ Confirmed: 2.21 / 1.386 / 0 → **A, B, C
+unchanged**; `m=∞` collapses every rate to C → 1.84 / 0.69 / 0 → **also unchanged**. Both extremes
+of the only knob produce the same ranking on this fixture. Learner also derived the inverse
+unprompted ("without the log, B goes over A").
+
+**Vocabulary corrections (the "your instinct is right, the standard term is…" pattern):**
+- learner's *"trust threshold / trust metric"* → **pseudo-count / prior strength** (equivalent
+  sample size); technique = **empirical Bayes shrinkage** ("empirical" = C measured from our own
+  data). Dropped *threshold* — it implies a discontinuity; `m` is a continuous dial. But their
+  threshold instinct is exactly right at **`n = m`, the crossover** where data and prior weigh 50/50.
+- Pinned **`m` is in units of ATTEMPTS**, which is what makes comparing it to `n` meaningful.
+  Showed the algebraic rearrangement `shrunk = n/(n+m)·raw + m/(n+m)·C` — a weighted average —
+  which converts their correct "+10 to 40 vs +10 to 1" intuition into the interview-ready form
+  (n=3 → 77% prior; n=10 → 50/50; n=200 → 4.8% prior).
+
+**Incidental but reusable — `Math.log` is `ln`.** Learner's calculator gave `log₁₀(40)=1.602` vs.
+our 3.689. Taught the part that matters: **log base cannot affect a ranking.** `log_b(x)=ln(x)/ln(b)`
+is a uniform positive rescale → monotonic → order-invariant; base changes only the printed number.
+`log(1)=0` holds in every base. Generalized to: *which transformations are ranking-invariant* —
+any monotonic squash (log, sqrt, log1p) is a free swap, argued on shape, never on sort-correctness.
+Also corrected `log(0)=0` → undefined/−∞ (harmless here; `attempts ≥ 1` for any row that exists),
+and that the log reads `attempts` (40) while the `+m` (50) lives only in the shrinkage denominator.
+
+**⚠️ MY MIS-SPECIFICATION (Q3 follow-up).** *"What would you change if you decided they had a
+point?"* was too vague and the learner said so — correctly. Rewritten as the real design question:
+*the author has domain knowledge our telemetry does not; "working as intended" is true but
+insufficient.* Their answer (remove the log) was **the right lever at the wrong magnitude**, which
+made a good menu:
+
+| response | breaks |
+| --- | --- |
+| remove the log | every 1/1 topic tops the chart — one false negative traded for dozens of false positives |
+| **`log1p`: `log(1+attempts)`** → 1 attempt scores `log(2)=0.69` | nothing structural; **the dialed version of the learner's instinct** |
+| Wilson lower bound instead of a point estimate | more principled, ~same outcome, more UI to explain — cost without benefit here |
+| **second section: "not enough data yet"** | nothing — the main ranking stays clean |
+| author-supplied pin / expected-difficulty flag | a new input to maintain |
+
+Lesson taught: **the author is not disputing the ranking, they are asking a different question**
+("what is untested" ≠ "where should I look first"), and we only built one view. Overloading one
+sort key with two intents makes it answer neither. When a user disputes a ranking, first work out
+which question they are asking — changing the sort is the last resort.
+
+**Q4 additions.** Learner had cost/bandwidth + determinism + inspectability + tunability. Added
+the two **dataset** properties that end the argument: (1) **no labels** — the target *is* the
+judgment we are being asked to produce, so learning it requires already having it; and (2)
+**population of one** — a model would learn *this player's style* and present it as a finding
+about players (same objection that killed collaborative filtering). Plus the statistical closer:
+with ~3 features and a few dozen rows a model has **less information than we already encoded by
+hand** — scarce data means hand-specified structure *is* the regularization. And the missing
+professional move: **say what would change your mind** (many installs + a real label proxy —
+quest abandonment, uninstall, repeated reload at one spot — at which point the heuristic becomes
+the baseline to beat).
+
+---
+
+## 2026-07-24 — Shrinkage / Bayesian smoothing (Phase 4a ranking, kickoff)
+
+Opened Phase 4a — *rank the dashboard* ("where are players most stuck," look-here-first).
+Chose option A (rank on difficulty = shrunk failure rate × volume) over option B (fold in
+post-failure behaviour) — build the scoring spine first, layer §3.1 behaviour later. Learner
+asked to be taught **shrinkage** properly before designing the formula.
+
+**Assessment types used:** prediction, explain-back (no multiple choice).
+
+**Break point found via prediction.** First prediction — "m: 10 → 3 on a 1-attempt/1-fail
+topic, rate up or down?" — learner was directionally right ("up") but reported honestly: *"I
+don't really get what m is… is it just an arbitrary number? I don't get what it's doing there."*
+That was the real gap: **the meaning of the pseudo-count `m`**, not the arithmetic.
+
+**Re-taught with a changed representation (protocol §4):**
+- Dropped the formula, used the **review analogy** — `m` = how many imaginary *average* reviews
+  you pad a 1-review restaurant with before trusting it. Named it a **tuning knob we own**, units
+  = attempts, not arbitrary.
+- **The dial table** (topic X, m = 0/1/3/10/50) did the real work: `m=0` = no shrinkage / pure
+  raw, `m=∞` = everything becomes the global average, every real `m` in between. This directly
+  answered "what is m doing there."
+
+**Explain-back — clean pass.** "Why does a 200-attempt topic barely move on the `m` dial while a
+1-attempt one swings?" → learner: *"the m effect on X is so heavy because there's such a lack of
+sample; more sample and it'd be more stable and wouldn't tune as much."* Correctly located it as
+**`m` relative to `n`**, not `m` alone — the tug-of-war framing. Shrinkage landed.
+
+**Also corrected:** learner floated the shrunk rate could exceed 1 — clarified it's a weighted
+average of `r` and `C`, so it's bounded between them; a rate > 1 would be a bug.
+
+**Volume half taught + landed.** Why volume at all (triage by impact, not just difficulty) and
+linear vs. damped: chose `shrunk_rate × log(attempts)`. Break-point-lite moment on `log(1)`:
+learner guessed a 1-attempt topic scores "≈ its shrunk rate"; corrected to `log(1) = 0` → score
+exactly 0, and *why* that is the design goal (noise hit by both terms at once).
+
+**Final assessment — clean 3/3 prediction on a hand-computable fixture (no MC).** Built
+`stats/ranking.ts` (pure `rankTopics(rows, m)` + thin handler reusing the index-only byTopic
+scan) + `GET /stats/ranking` + `ranking.test.ts` (Node built-in runner). Gave the learner the
+3-row fixture (C = 0.5, m = 10) and asked for C / full order / noise's exact score. Learner:
+**C = 0.5 ✓, order 1→3→2 ✓ (incl. the subtle brutal-popular > easy-popular at similar volume),
+noise = 0 ✓.** The heuristic (shrinkage + log-damped volume) is solid. Code green: tsc + 5/5 tests.
+
+**Dashboard view SHIPPED same session (4a fully closed).** `RankingList.tsx` — a pure Server
+Component (no 'use client', no Recharts), rendered first on /mods/ccff as "Where players are most
+stuck". Teaching points landed in the build: (1) a ranked list that EXPOSES the ingredients (n,
+raw→adjusted fail rate side by side = shrinkage visibly at work) beats a bar chart of the
+composite score, which would hide the why (doc 10 §2/§3.3); (2) you don't reach for a charting
+lib for ordered-data-plus-a-bar — a CSS width meter in a Server Component ships zero JS and the
+drill-downs stay URL-as-state; (3) single-hue magnitude meter from the same validated blue ramp
+as FrictionCharts, theme-aware via `dark:` (no matchMedia). Data layer: `getRankingStats()` +
+snapshot capture, same live/snapshot/unavailable degradation contract as the other three.
+**Verified:** api tsc + 5/5 tests, dashboard tsc + `next build` clean, and SSR'd /mods/ccff
+against the live local API (globalFailRate 0.7486, meters descending 100%→90.1%→… correctly, 200
+no errors). Synthetic local data is all high-n so raw≈adjusted — the shrinkage GAP is proven by
+the unit-test fixture, not visible here.
+
+**Next:** doc updates (05/07/10 via /update-docs) + commit, then Phase 4b (pgvector hybrid
+search — AI eng + the Postgres perf core qual in one thread).
+
 ## 2026-07-23 — React fundamentals: the render model + the server/client boundary (dashboard)
 
 Learner asked (end of prior session) to pause feature work and learn to *read* the
