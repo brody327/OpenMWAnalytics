@@ -1,8 +1,13 @@
 # 11 — Search & Retrieval (Phase 4b: hybrid search over the game corpus)
 
-**Status: DESIGNED 2026-07-25, NOT BUILT.** Every decision below was made explicitly and is
-ratified; no code exists yet. Steps 7 (index tuning + measurement) and 8 (dashboard view +
-synthetic seeding) are not yet designed.
+**Status: steps 1–6 BUILT 2026-07-26** (`api/src/corpus/`, branch `feat/corpus-ingest`) — parser,
+chunking, embedding providers and the ingest job, 48 tests. Step 7 (index tuning + measurement)
+and step 8 (dashboard view + synthetic seeding) are still undesigned.
+
+⚠️ **Numbers below marked MEASURED replaced earlier estimates on 2026-07-26.** Several estimates
+were wrong, and one design assumption (`record_id` as a natural key) was wrong — see §6a. The
+corpus has NOT yet been embedded for real: the local database holds *fake* deterministic vectors,
+which are searchable and meaningless. **No recall or ranking number is valid until a real run.**
 
 Phase 4a (`07 §7`) ranked what the dashboard already knew. This phase adds a *second corpus* —
 the game's own text — and joins it to telemetry. It is the AI-engineering thread and the
@@ -24,10 +29,34 @@ lookup where keywords fail. This is the clearest justification for hybrid we hav
 from the product side, not the engineering side.
 
 **B — content recommendation for a skill check (machine-issued).**
-> *"Players buff Speechcraft with potions 40% of the time and enchanted gear 5% — what else in the
+> *"Players buff Personality with potions 40% of the time and enchanted gear 5% — what else in the
 > game could serve this check, and where is it?"*
 
 Feeds the design loop: the author places content to open a route players aren't using.
+
+⚠️ **"Skill check" here includes ATTRIBUTE checks** — CCFF gates on Personality, which is an
+attribute, not a skill. This matters because Morrowind's alchemy fortifies *attributes* and never
+skills: **0 of 289 `ALCH` effects and 0 of 355 `INGR` effects target a skill**, so a
+literal-minded reading of "skill" makes the potion route look impossible. It is not — potions and
+ingredients are exactly how an attribute check gets buffed.
+
+MEASURED coverage for Personality — all four vehicles participate, which is why `record_effects`
+carries `affected_kind` (`'skill' | 'attribute'`) to disambiguate ids that collide across the two
+enums:
+
+| vehicle | Personality-targeting effects |
+| --- | --- |
+| `ALCH` potions | 12 |
+| `INGR` ingredients | 18 |
+| `SPEL` spells | 29 |
+| `ENCH` enchantments | 27 |
+
+The pre-filter returns **19 `Fortify` candidates** for Personality (Charisma, Lady's Favor,
+Colovia's Grace, …). Note the filter must also read the effect **name**, not just its target:
+`Drain Attribute` hits Personality too, in the opposite direction.
+
+Across the whole corpus the effects table covers **35 distinct targets — all 8 attributes and all
+27 skills.** Nothing about the schema privileges one check.
 
 ### What does NOT justify a vector
 
@@ -54,15 +83,30 @@ Extracted with `esmtool.exe dump -p` (ships with the OpenMW install, `H:\OpenMW 
 
 | source | records | notable |
 | --- | --- | --- |
-| `Morrowind.esm` | ~31,000 | **23,693 `INFO`** (dialogue + journal), 2,538 `CELL`, 2,675 `NPC_`, 2,358 `DIAL`, 990 `SPEL`, 574 `BOOK`, 258 `ALCH`, 137 `MGEF` |
+| `Morrowind.esm` | **48,295 headers** | **23,693 `INFO`** (dialogue + journal), 2,788 `STAT`, 2,675 `NPC_`, 2,538 `CELL`, 2,358 `DIAL`, 1,449 `GMST`, 1,390 `LAND`, 1,194 `PGRD`, 990 `SPEL`, 708 `ENCH`, 574 `BOOK`, 137 `MGEF` |
 | CCFF `.omwaddon` | ~500 | 226 `INFO`, 131 `ACTI`, 60 `DIAL`, 27 `BOOK`, 17 `CELL`, 13 `NPC_` |
 
 ~31 MB of extractable text, **zero synthetic content** — the same standard that killed
 collaborative filtering (`10 §3.3`, [[project-search-ranking-ai-thread]]).
 
-**Decision: index everything.** ~34,000 chunks. Most documents will be searchable but *mute*
-(no telemetry attached). Accepted deliberately — the volume is what makes the Postgres tuning
-real, and `00`'s "blocked on volume, not capability" is the constraint this lifts.
+**Decision: index everything.** Most documents are searchable but *mute* (no telemetry attached).
+Accepted deliberately — the volume is what makes the Postgres tuning real, and `00`'s "blocked on
+volume, not capability" is the constraint this lifts.
+
+**MEASURED 2026-07-26** — the earlier "~31,000 records / ~34,000 chunks" was close by luck; the
+composition is different from what was assumed:
+
+| | count | |
+| --- | --- | --- |
+| record headers | **48,295** | parse time ~245 ms |
+| → indexable records | **34,810** | after dropping empties and containers |
+| → skipped as empty | **11,127** | `LAND`, `PGRD`, `GMST`, `STAT`, unnamed exterior `CELL`s — no name, no prose |
+| → `DIAL` containers | **2,358** | consumed as parser state, never emitted (§4a) |
+| → **chunks** | **36,567** | 574 books expand to 2,356 chunks |
+| effects | **2,960** | across `ALCH` / `SPEL` / `ENCH` / `INGR` |
+
+The three counts reconcile exactly (`34,810 + 11,127 + 2,358 = 48,295`), and **that invariant is
+a test.** It is what caught the id-less-header bug (§6a) — no individual record looked wrong.
 
 ---
 
@@ -70,7 +114,7 @@ real, and `00`'s "blocked on volume, not capability" is the constraint this lift
 
 | telemetry field | joins to | quality |
 | --- | --- | --- |
-| `AreaEntered.area` | `CELL.name` (interior) / `REGN` id (exterior) | ✅ **exact** |
+| `AreaEntered.area` | `CELL.name` (interior) / `REGN` id (exterior) | ✅ **exact** — **1,240 named cells indexed** (of 2,538; the rest are unnamed exterior tiles). ⚠️ These were all being *dropped* until §6a was fixed |
 | buff source id from `ActiveSpell.id` (future `SkillCheckResolved`) | `SPEL` / `ALCH` / `ENCH` | ✅ **exact** — the best join in the project |
 | `ConfrontationAttempted.suspect` | CCFF records by `*titania*` naming convention | ⚠️ **convention, not a contract** |
 | `ConfrontationAttempted.topic` | — | ❌ **none** |
@@ -102,9 +146,9 @@ the grain, and it is unrecoverable.
 | `CELL`, `NPC_`, `SPEL`, `ALCH`, items | whole record | text is thin by nature |
 | `BOOK` (601 incl. CCFF) | **chunked**, paragraph-ish, `record_id` retained | the only long-form text |
 
-Net ≈ **34,000 chunks**. Embed fine, return coarse — the pattern is called **parent-document
-retrieval** ("small-to-big"). Book-level results are a `GROUP BY record_id`, and the aggregate is
-the knob:
+Net = **36,567 chunks** (MEASURED; 574 books expand to 2,356). Embed fine, return coarse — the
+pattern is called **parent-document retrieval** ("small-to-big"). Book-level results are a
+`GROUP BY record_id`, and the aggregate is the knob:
 
 | rollup | semantics |
 | --- | --- |
@@ -132,23 +176,44 @@ heuristic-over-model in 4a, why a model now?"*
 | | choice |
 | --- | --- |
 | provider | OpenAI `text-embedding-3-small` (**Anthropic has no embeddings endpoint**) |
-| embed at | 1536, retained for the dimension sweep |
+| embed at | 1536 — **derived from the model, not configurable** (§8a) |
 | production dims | **384**, truncated + **re-normalized** |
-| cost | **~$0.04 one-time** (~2 M tokens); per-query negligible |
-| escape hatch | `3-large` truncated to 384 if recall disappoints (~$0.26) |
+| cost | **MEASURED: ~$0.026 one-time** (~1.28 M tokens over 36,567 chunks, of which only **28,252 are unique text**); per-query negligible |
+| escape hatch | `3-large` truncated to 384 if recall disappoints |
 | lock-in | model change ⇒ **full re-embed + index rebuild**; vectors from different models are incomparable |
 
+**23% of the corpus is exact-duplicate text** (repeated stock dialogue, plus records whose
+`full_text` falls back to their name). Because the idempotency key is already a *content hash*,
+de-duplicating before the API call is the same lookup — it removes ~8,300 inputs for free.
+Content-addressing tends to pay twice like that.
+
 **Cost is not a decision criterion here — memory is.** The whole corpus embeds for pennies. The
-scarce resource is `shared_buffers` on a **`db.t3.micro`, 1 GB RAM, 20 GB storage** (confirmed by
-the user 2026-07-25) ⇒ `shared_buffers` ≈ **256 MB**:
+scarce resource is `shared_buffers` on a **`db.t3.micro`, 1 GB RAM, 20 GB storage**.
 
-| dims | HNSW index | share of pool | verdict |
+⚠️ **MEASURED against the live RDS instance 2026-07-26: `shared_buffers` = 185 MB, not the 256 MB
+this section assumed** (25% of 1 GB was a guess; RDS's actual default formula gives less). Index
+sizes were also measured, on the real 36,567-chunk corpus:
+
+| | measured | earlier estimate |
+| --- | --- | --- |
+| raw vector column (36,567 × 384) | **54 MB** | 52 MB ✅ |
+| HNSW index | **56 MB — ~1.04× the column** | "~1.25×", and "2×" in one session ❌ |
+| GIN `tsv` index | **6 MB — 9.3× cheaper than HNSW** | "a few MB, an order of magnitude" ✅ |
+
+HNSW is barely larger than the vectors it holds because at 384 dims each node's *data* (1,536
+bytes) dwarfs its *graph links* (~32 neighbours × 6 bytes). The link overhead is ~4%, not 100%.
+
+| dims | HNSW index | share of the **measured** 185 MB pool | verdict |
 | --- | --- | --- | --- |
-| 384 | ~65 MB | **25%** | comfortable |
-| 768 | ~125 MB | 49% | viable, tight |
-| 1536 | ~250 MB | 98% | dead |
+| 384 | **56 MB (measured)** | **30%** | comfortable |
+| 768 | ~112 MB | 61% | viable, tight |
+| 1536 | ~224 MB | **121%** — and the *raw column alone* is 113% | dead |
 
-Note **20 GB of disk makes every option fit** — disk was never the constraint.
+Note **20 GB of disk makes every option fit** — disk was never the constraint; residency is (§7).
+
+⭐ **The decision survived being wrong twice, in opposite directions.** 384 wins under the
+optimistic multiplier and the pessimistic one, under 256 MB and under 185 MB. A choice that only
+holds if your estimates are right is a weaker choice than one robust to them being wrong.
 
 **Why 384 is not a quality compromise:** modern embedding models are trained with **Matryoshka
 representation learning** — leading dimensions carry the most information, so truncation degrades
@@ -164,7 +229,7 @@ table.
 
 ```
 game_records        one row per record — the thing you RETURN
-  record_id PK · source · type · name · full_text
+  record_id PK · source · type · name · full_text     ← ⚠️ NOT a clean natural key, see §6a
 
 game_chunks         one row per embeddable unit — the thing you SEARCH
   chunk_id PK · record_id FK · ordinal · text
@@ -208,6 +273,47 @@ generated columns. The flexibility JSONB is usually chosen for is here better se
 
 ---
 
+## 6a. ⚠️ The esmtool id is NOT a natural key — corrected 2026-07-26
+
+§6 above says `record_id` is "esmtool's own id … a NATURAL key, deliberately." **That was wrong**,
+and it failed in three distinct ways. All three were caught by a *constraint or a total*, never by
+reading output — every individual record looked correct in each case.
+
+| # | what | scale | resolution |
+| --- | --- | --- | --- |
+| 1 | **5,286 headers carry no id at all** — `Record: CELL ` with a trailing space (`SKIL` 27, `MGEF` 137, `CELL` 2,538, `LAND` 1,390, `PGRD` 1,194) | 11% of headers | accept id-less headers; synthesize `TYPE:name`, or `TYPE:index` for `SKIL`/`MGEF` |
+| 2 | **`INFO` ids are unique only WITHIN a topic** — 99 repeat across topics, one pair of topics differing only in capitalisation | 99 collisions | key `INFO` as `topic#id`; resolves all 99 |
+| 3 | **25 records genuinely share ids in the source** — 16 `CELL` groups where a town spans several same-named exterior cells (`Sadrith Mora` ×3), plus one `BSGN` | 25 | collapse last-wins, and **count it** |
+
+**(1) was the dangerous one.** Requiring the quoted id meant those headers did not start a new
+record, so their fields were silently folded into the **previous** record. It was found only
+because `emitted + skipped + containers` did not equal the header count. Recovered by the fix:
+**1,240 named `CELL`s** — the `AreaEntered.area` join target this document grades as the platform's
+one exact join (§3) — plus 137 `MGEF` and 27 `SKIL` **descriptions**, real prose about what effects
+and skills do.
+
+**(3) is collapsed rather than disambiguated on purpose.** For a *search* corpus, "Sadrith Mora"
+should be one result rather than three identical ones. But the count is reported, because a number
+that grows means some new type started colliding for a reason nobody has looked at.
+
+> **The transferable rule: when N things go in, assert that N things come out, classified.** Two
+> separate bugs here — and the missing-`ENCH` bug in §6b — were invisible record-by-record and
+> obvious the moment a total was reconciled. Both invariants are now tests.
+
+## 6b. Having effects is enough to be content
+
+`ENCH` records carry **no `Name:` and no prose** — only `Type`/`Cost`/`Charge` and their effects.
+An initial "is this empty?" test of `(name || text)` therefore discarded **all 708 enchantments and
+1,069 effects**, silently deleting the entire *enchanted gear* vehicle from §1's use case B.
+
+It is also structural: `record_effects.record_id` is an FK to `game_records`, so **a record that
+owns rows in a child table must exist however little text it has.** `full_text` falls back to the
+record id to keep the `NOT NULL` column satisfiable.
+
+Found by reconciling parsed effects (1,891) against effect lines in the dump (2,960).
+
+---
+
 ## 7. Filtered vector search (step 3b) — where a `WHERE` fights an ANN index
 
 **HNSW = Hierarchical Navigable Small World** — a layered proximity graph, structurally a skip
@@ -239,11 +345,33 @@ Two orderings that do not compose — a btree yields a **set**, HNSW yields a **
 
 For middle-selectivity queries (none yet): **iterative index scans** (pgvector 0.8+, keeps pulling
 until K rows pass the filter, capped by `hnsw.max_scan_tuples`) or a **partial index**
-(`... WHERE type='ALCH'`). ⚠️ Confirm the pgvector version available on RDS before relying on
-iterative scans.
+(`... WHERE type='ALCH'`).
 
-⚠️ **Index build** wants the graph in `maintenance_work_mem`; if it doesn't fit the build falls
-back to a much slower path. Verify before assuming a fast rebuild.
+✅ **VERIFIED on the live RDS instance 2026-07-26** (tested inside a transaction, then rolled back,
+so production still carries only `plpgsql` until the migration deploys):
+
+| check | result |
+| --- | --- |
+| parameter group permits `CREATE EXTENSION vector` | ✅ yes |
+| pgvector version | **0.8.2** on RDS, 0.8.5 locally ⇒ **iterative index scans are available** |
+| local dev image | `postgres:16` has no pgvector at all ⇒ switched to `pgvector/pgvector:pg16` |
+
+⚠️ **`maintenance_work_mem` = 64 MB — MEASURED, and smaller than the 56 MB…65 MB index.** An HNSW
+build that does not fit falls back to a two-phase on-disk path, paying the pointer-chase cost for
+every node inserted rather than only at query time.
+
+**Decision: do nothing until it is measured.** 36,567 rows is small; pre-tuning a parameter to
+avoid an unmeasured cost is the same error as reaching for ML before a heuristic. If it ever
+matters, raise it **session-scoped** (`SET maintenance_work_mem` before `CREATE INDEX`) and
+**never in the parameter group** — autovacuum workers inherit it (`autovacuum_work_mem` defaults
+to `-1`), so a group-wide 256 MB is a 768 MB ceiling across three workers on a 1 GB box, and an
+OOM on RDS restarts Postgres. It is a *ceiling*, not a reservation: nothing is allocated until a
+maintenance operation asks for it.
+
+⚠️ **Also measured:** swapping the local image moved glibc 2.41 → 2.36, so every text btree was
+built under different collation rules than it would now be searched under — silent wrong answers,
+on the database step 7 benchmarks against. Fixed with `REINDEX DATABASE` + `REFRESH COLLATION
+VERSION` (5 s). Same hazard shape as §8 and §9: two sides of a transformation that must agree.
 
 ---
 
@@ -289,6 +417,40 @@ are quietly wrong.
 The vector is a function of `(text, model, dims, truncation, normalization)`. Skip only when
 `text_hash` **and** `embedding_model` **and** `embedding_dims` all match. A model change then
 invalidates everything by construction — the loud, correct behaviour, and it costs four cents.
+
+### 8a. The trap had a sibling — closed 2026-07-26
+
+Writing the test for the above exposed a second instance one level down. The provider originally
+took a `requestDims` option: the width asked of OpenAI *before* truncating. Embedding at 1536 and
+truncating to 384 does **not** produce the same vector as embedding at 3072 and truncating to 384 —
+yet both store `model='text-embedding-3-small', dims=384`. **Identical provenance, different
+vectors**, and unlike a stored-width change the fixed-width `vector(384)` column cannot catch it
+either.
+
+**Fixed by deleting the knob, not by adding a fourth key column.** The request width is now derived
+from the model (`NATIVE_DIMS`: `3-small → 1536`, `3-large → 3072`), which makes the vector a
+function of exactly `(text, model, storedDims)` — precisely what the key covers.
+
+The argument for removal rather than tracking: the only legitimate reason to change the request
+width is changing models, **and a model change already invalidates the key**; requesting less than
+the native width is strictly worse than truncating from it. Step 7's sweep is unaffected because it
+truncates one set of stored 1536-dim vectors locally — it varies the **stored** width, never the
+requested one. A column tracking a variable that no longer varies is schema guarding a footgun
+instead of no footgun. Unknown models **throw at construction**; defaulting to 1536 would silently
+change every vector a future model produced.
+
+**Residual, stated rather than hidden:** the truncate/normalize transform is itself an input the key
+does not cover. Change `truncateAndNormalize` and unchanged text is still skipped. The mitigation is
+that it is *code, not configuration* — it cannot drift via an env var — plus a comment at that
+function saying so, placed where someone would break it.
+
+### 8b. Two more defences, both structural
+
+- **`CHECK (embedding IS NULL) = (embedding_model IS NULL) = (embedding_dims IS NULL)`** — a vector
+  whose provenance is unknown cannot exist. Verified: the constraint rejects the write.
+- **`vector(384)` is fixed-width**, so a stored-width change is refused by Postgres regardless of
+  whether the key noticed. Two independent defences, and the schema-level one does not depend on
+  us getting the key right.
 
 **This is the fourth instance of one failure mode in this project** (unverified migrations → prod
 500; the `ORDER BY` output-alias sort returning *correct* results at ~2,000× cost; the staleness
@@ -345,8 +507,8 @@ The indexed form is lossy — `cosad` cannot be rendered back to `Cosades` — w
 `game_records.full_text` exists separately for display.
 
 **Index: GIN** (slower build, faster search; right side of the trade for a read-heavy corpus).
-Expected size a few MB — **an order of magnitude cheaper than the 65 MB HNSW index.** The semantic
-half is the expensive half; know you are paying for it.
+**MEASURED: 6 MB, against the HNSW index's 56 MB — 9.3× cheaper**, confirming the prediction. The
+semantic half is the expensive half; know which one you are paying for.
 
 ---
 
@@ -404,13 +566,45 @@ FROM lex FULL OUTER JOIN vec USING (chunk_id) ORDER BY rrf DESC LIMIT 10;
 
 ---
 
-## 11. Not yet designed
+## 11. What is built, and what is next
 
+### Built 2026-07-26 — `api/src/corpus/`, branch `feat/corpus-ingest`
+
+| module | what |
+| --- | --- |
+| `parseEsmDump.ts` | pure string → records. `esmtool` has **no structured output**, so this parses a human-readable debug dump; the fixture test is the tripwire for a future OpenMW reformat |
+| `chunk.ts` | grain + packing + `sha256` content hash |
+| `embeddings.ts` | `EmbeddingProvider` interface, OpenAI over plain `fetch` (no SDK dependency), and a deterministic offline **fake** |
+| `ingest.ts` | hash-diff upsert, dedup, orphan removal; embedding happens **outside** the transaction |
+| `ingestCli.ts` | `npm run ingest-corpus -- <dump> <source> [--fake]` |
+
+**48 tests.** Proven rather than asserted: re-running over unchanged text embeds *nothing*; a model
+swap re-embeds everything and exactly one model may exist in the column; a shortened book drops its
+tail chunks (the orphan a cascade cannot catch).
+
+Measured, full corpus, fake provider, local Postgres: first run **48.2 s**, second run **2.7 s** with
+36,567 chunks skipped and 0 embedded.
+
+⚠️ **Format facts that differ from any reasonable assumption** — all verified, none guessed:
+`INGR` effects use a *different shape* from `ALCH`/`SPEL`/`ENCH` (no `[N]` index, no magnitude,
+sub-fields at the *same* indent ⇒ match by key, never by indentation) and print `Invalid (-1)` for
+the unused `Skill`/`Attribute`; `INFO` ids are numeric hashes whose topic lives in the *preceding*
+`DIAL`; `DIAL` is a container, consumed as state and never emitted; book text is a `START`/`END`
+block of HTML-ish markup, and the corpus genuinely contains script comments like
+`;Cell: Balmora, Council Club` — a field-shaped line inside a text block.
+
+### Not yet done
+
+- 🚨 **A real embedding run.** The database holds **fake** vectors: deterministic, searchable, and
+  semantically meaningless. **Every recall, ranking and quality number is invalid until this runs**
+  (~$0.026, needs `OPENAI_API_KEY`).
 - **Step 7 — index tuning + measurement.** The dims sweep (`dims × index size × recall@10 × p95`),
-  `hnsw.ef_search` / `m` / `ef_construction`, and how recall is even measured (exact KNN as ground
-  truth). This is the Postgres-performance payoff and the reason the phase was sequenced first.
+  `hnsw.ef_search` / `m` / `ef_construction`, and how recall is measured at all — **exact KNN as
+  ground truth**, i.e. what fraction of the true top-k the approximate index returned. This is the
+  Postgres-performance payoff and the reason the phase was sequenced first. Blocked on the real run.
 - **Step 8 — dashboard view + synthetic seeding** (see [[project-synthetic-data-policy]]:
   `env='synthetic'`, banner, never a truncate).
-- **Deployment path.** Ingest is local; the `pgvector` extension must exist on RDS and be created
-  by a migration (`09 §7`'s initContainer). **Unverified: whether the RDS Postgres 16 parameter
-  group permits `CREATE EXTENSION vector`, and which pgvector version is available.**
+- **Deployment.** ✅ `CREATE EXTENSION vector` is permitted on RDS and lives in migration `0005`
+  (`09 §7`'s initContainer). Ingest stays local by necessity — the `.esm` files cannot leave the
+  machine — so **production's corpus is populated by running ingest against the RDS URL**, which is
+  one env var away from the local run. The CLI prints its target host before doing anything.
