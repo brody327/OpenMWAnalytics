@@ -49,6 +49,34 @@ Prefer the top of this list. Reach for the bottom only as a supplement.
 sentence, and a wrong prediction locates the misunderstanding *precisely* — far better than
 discovering it three concepts later.
 
+### ⚠️ Quiz length must be PROPORTIONAL to the material covered
+
+**Learner request, 2026-07-25:** *"I am noticing we usually only do 3 questions regardless of
+length of content/material gone over. If we should get questions / go over the breadth of the
+content — it should be proportional."*
+
+Three questions had become a reflex regardless of whether the session covered one concept or
+fifteen. A fixed-size quiz over a large session **samples a fraction of it and then reports a
+score as if it covered the whole** — which is the same false-signal failure as the 6/6 episode,
+arriving by a different route. A 3/3 on a session with twelve distinct concepts means almost
+nothing about the other nine.
+
+**How to size a checkpoint:**
+
+1. **List the distinct decisions/concepts** the session actually covered before writing any
+   questions. That list — not habit — sets the count.
+2. **Roughly one question per concept that carries forward.** A short session with two concepts
+   gets two questions. A long design session with ten gets closer to ten. Do not compress.
+3. **Cover the BREADTH first, then go deep.** Better to touch every concept once than to ask
+   three deep questions about the first third and silently skip the rest.
+4. **Split it if it is long.** A twelve-question check can run as two or three rounds across the
+   session rather than one wall of questions — but the total must still cover the material.
+5. **Name the coverage in the log.** Record which concepts were assessed *and which were not*, so
+   an unassessed concept is visibly untested rather than falsely implied to be understood.
+
+The assessment-type rules still apply at every size: prediction / explain-back / transfer, and
+**never multiple choice alone**.
+
 ---
 
 ## 3. Pacing rules
