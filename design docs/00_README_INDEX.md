@@ -19,7 +19,7 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ⚠️ SDK is now a FACTORY (`require(...)(modId)`, breaking, 2026-07-23) — **not yet verified in-game**; auto path still open |
 | `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**; + migrations run as an initContainer and a CronJob folds the rollups (2026-07-22) |
 | `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20 |
-| `11_SEARCH_AND_RETRIEVAL.md` | Phase 4b: hybrid (lexical + vector) search over the game corpus, and its joins to telemetry. Grain, embeddings, schema, ingest, `tsvector`, RRF fusion. | 🔵 **designed 2026-07-25, NOT built**; steps 7–8 still open |
+| `11_SEARCH_AND_RETRIEVAL.md` | Phase 4b: hybrid (lexical + vector) search over the game corpus, and its joins to telemetry. Grain, embeddings, schema, ingest, `tsvector`, RRF fusion. | 🟢 **steps 1–6 BUILT 2026-07-26** (`api/src/corpus/`, 48 tests); corpus still on FAKE embeddings; steps 7–8 open |
 | `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |
 
 ## Source-of-truth rules
@@ -102,15 +102,23 @@ ingest authenticated. Remaining threads:
   instrumentation path (engine hook, no mod cooperation); all current work is manual.
 - **Search / ranking / pgvector** — the AI-engineering thread (Phase 4). ✅ **4a done
   2026-07-24**: stuck-ranking heuristic (`GET /stats/ranking` + view, `07 §7`) — the "ranking
-  brought to bear on how the tool works" angle, no new data. 🔵 **4b DESIGNED 2026-07-25, not
-  built** — see the new **`11_SEARCH_AND_RETRIEVAL.md`**; steps 1–6 (grain, embeddings, schema,
-  ingest, lexical, fusion) are ratified, steps 7–8 (index tuning + measurement; dashboard view +
+  brought to bear on how the tool works" angle, no new data. 🟢 **4b steps 1–6 BUILT 2026-07-26**
+  — see **`11_SEARCH_AND_RETRIEVAL.md`**; parser, chunking, embedding providers and the ingest job
+  live in `api/src/corpus/` with 48 tests. Steps 7–8 (index tuning + measurement; dashboard view +
   synthetic seeding) still open. Then 4c LLM insights.
-  - ⚠️ **This lifts the "blocked on volume" constraint below** — ~34,000 chunks × 384-dim vectors
-    is the first genuinely large data the project has had, on a `db.t3.micro` (1 GB RAM ⇒
-    `shared_buffers` ≈ 256 MB). Memory pressure, not disk, is the binding constraint.
-  - ⚠️ **Unverified:** whether the RDS parameter group permits `CREATE EXTENSION vector`, and
-    which pgvector version is available (decides whether iterative index scans exist).
+  - 🚨 **The corpus is embedded with a FAKE provider.** Vectors are deterministic, searchable and
+    semantically meaningless. **No recall, ranking or quality number is valid** until a real run
+    (~$0.026, needs `OPENAI_API_KEY`). Step 7 is blocked on it.
+  - ⚠️ **This lifts the "blocked on volume" constraint below** — **36,567 chunks** × 384-dim
+    vectors is the first genuinely large data the project has had, on a `db.t3.micro`. **MEASURED:
+    `shared_buffers` = 185 MB (not the 256 MB assumed); HNSW index 56 MB = 30% of the pool; GIN
+    `tsv` 6 MB.** Memory pressure, not disk, is the binding constraint.
+  - ✅ **Now verified:** the RDS parameter group **permits** `CREATE EXTENSION vector`; **pgvector
+    0.8.2** on RDS (0.8.5 local) ⇒ iterative index scans are available. The extension ships in
+    migration `0005`.
+  - ⚠️ **`maintenance_work_mem` = 64 MB**, smaller than the index ⇒ HNSW builds take the slow
+    on-disk path. Deliberately untuned until measured; if raised, **session-scoped only** —
+    autovacuum workers inherit a parameter-group value and would OOM a 1 GB box.
 - **Synthetic seeding** (decided 2026-07-25, not built) — demo volume via the existing `env`
   column (`env='synthetic'` + a dashboard banner), **not** a truncate-and-restart. Volume is not
   validity: it makes the demo real, and it still does not justify collaborative filtering.
