@@ -144,12 +144,23 @@ export function parseEsmDump(dump: string): ParseResult {
     if (!current.recordId && current.name) {
       current.recordId = `${current.type}:${current.name}`;
     }
-    if (!current.recordId || (!current.fullText && !current.name)) {
+    // ⚠️ HAVING EFFECTS IS ENOUGH TO BE CONTENT. ENCH records carry no Name: and no prose --
+    // only Type/Cost/Charge and their effects -- so an "empty" test of (name || text) dropped
+    // all 708 of them along with 1,069 effects, which is the entire "enchanted gear" vehicle
+    // for 11 §1B. Caught by reconciling parsed effects against the dump's effect lines, the
+    // same technique that caught the id-less headers; neither was visible record-by-record.
+    //
+    // It is also structural: record_effects.record_id is an FK to game_records, so discarding
+    // the parent makes its effects unstorable. A record that owns rows in a child table must
+    // exist regardless of how little text it has.
+    const hasContent = Boolean(current.fullText || current.name || current.effects.length);
+    if (!current.recordId || !hasContent) {
       skippedEmpty += 1;
     } else {
-      // Records with no prose (potions, spells, cells) are still worth indexing -- their name
-      // IS their content. Their semantics live mostly in record_effects, which is relational.
-      if (!current.fullText) current.fullText = current.name ?? '';
+      // Records with no prose (potions, spells, cells, enchantments) are still worth indexing --
+      // their name IS their content, and failing that their id is. The real semantics live in
+      // record_effects, which is relational precisely so they are queryable rather than embedded.
+      if (!current.fullText) current.fullText = current.name ?? current.recordId;
       records.push(current);
     }
     current = null;

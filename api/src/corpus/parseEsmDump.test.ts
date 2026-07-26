@@ -66,6 +66,18 @@ The Great Sage was a tall, untidy man.<BR>
 END----------------------------------------
   Deleted: 0
 
+Record: ENCH "test magic axe"
+Record flags: [None] (0x00000000)
+  Type: Cast Once (0)
+  Cost: 4
+  Charge: 4
+  Effect[0]: Fortify Maximum Magicka (84)
+    Skill: Axe (6)
+    Range: Self (0)
+    Duration: 1
+    Magnitude: 1-15
+  Deleted: 0
+
 Record: MGEF
 Record flags: [None] (0x00000000)
   Index: Water Breathing (0)
@@ -97,9 +109,30 @@ test('skips the esmtool file header and finds every content record', () => {
   // dropped as genuinely empty.
   assert.deepEqual(
     parsed.records.map((r) => r.type),
-    ['ALCH', 'INGR', 'INFO', 'BOOK', 'MGEF', 'CELL'],
+    ['ALCH', 'INGR', 'INFO', 'BOOK', 'ENCH', 'MGEF', 'CELL'],
   );
   assert.equal(parsed.skippedEmpty, 2);
+});
+
+// ⚠️ REGRESSION: ENCH has no Name: and no prose -- only Type/Cost/Charge and its effects. An
+// "empty" test of (name || text) discarded all 708 enchantments and 1,069 effects, silently
+// removing the "enchanted gear" vehicle from 11 §1B.
+test('a record with effects but no name and no prose is KEPT', () => {
+  const ench = byId.get('test magic axe')!;
+  assert.ok(ench, 'effects alone make a record worth storing');
+  assert.equal(ench.effects.length, 1);
+  assert.equal(ench.effects[0].affected, 'axe');
+  assert.equal(ench.effects[0].affectedKind, 'skill');
+  // record_effects.record_id is an FK to game_records: no parent row, no effects.
+  assert.equal(ench.fullText, 'test magic axe', 'falls back to the id so full_text stays NOT NULL');
+});
+
+// The effects-level twin of the header reconciliation. Both bugs were invisible record-by-record
+// and both showed up as a total that did not add up.
+test('every effect line in the input is accounted for', () => {
+  const effectLines = (FIXTURE.match(/^\s+Effect(\[\d+\])?: /gm) ?? []).length;
+  const parsedEffects = parsed.records.reduce((n, r) => n + r.effects.length, 0);
+  assert.equal(parsedEffects, effectLines);
 });
 
 // ⚠️ THE REGRESSION TEST FOR THE WORST BUG THIS PARSER HAD. 5,286 of Morrowind.esm's headers
