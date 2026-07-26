@@ -11,7 +11,19 @@ import {
   jsonb,
   primaryKey,
   index,
+  check,
+  vector,
+  customType,
 } from 'drizzle-orm/pg-core';
+
+// drizzle has no built-in `tsvector`, so declare the raw type. We never read this column into
+// JS -- it exists only for the GIN index and the @@ operator to work against -- so `string` is
+// a placeholder, not a promise about its shape.
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return 'tsvector';
+  },
+});
 
 // The physical form of the event envelope from `design docs/02` + `06`.
 // Envelope fields are real columns (indexed/queried/joined); the type-specific
@@ -268,3 +280,216 @@ export const frictionSessionsDone = pgTable('friction_sessions_done', {
   sessionId: uuid('session_id').primaryKey(),
   rolledAt: timestamp('rolled_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ===========================================================================================
+// --- Search & retrieval over the GAME CORPUS (design docs 11) ---
+//
+// A second corpus alongside `events`: the game's own text (dialogue, books, cells, spells,
+// items), extracted locally with esmtool and joined to telemetry. Everything above this line
+// is behaviour the platform OBSERVED; everything below is content the game SHIPS.
+// ===========================================================================================
+
+// One row per game record -- the thing a search RETURNS (11 §4).
+//
+// Split from game_chunks because retrieval grain and display grain are different questions:
+// we search fine (paragraph) and return coarse (record). The pattern is called PARENT-DOCUMENT
+// RETRIEVAL, and this is the parent.
+//
+// It also exists because the indexed form is LOSSY: `to_tsvector` stems `Cosades` to `cosad`
+// and cannot render it back. Anything shown to a human must come from `full_text`, never from
+// a reconstruction of the index.
+export const gameRecords = pgTable(
+  'game_records',
+  {
+    // esmtool's own id (e.g. 'ccff_titania_injury_report'). A NATURAL key, deliberately: it is
+    // what the plugin files use, what telemetry joins against (11 §3), and what makes ingest
+    // re-runnable without a lookup table mapping surrogate ids back to game content.
+    recordId: text('record_id').primaryKey(),
+    source: text('source').notNull(),   // 'Morrowind.esm' | 'ccff.omwaddon' | ...
+    type: text('type').notNull(),       // esmtool record type: INFO | BOOK | CELL | SPEL | ALCH | NPC_ ...
+    name: text('name'),                 // display name; NULL for records that genuinely have none (many INFO rows)
+    fullText: text('full_text').notNull(),
+  },
+  (t) => [
+    // The corpus is browsed and filtered by type far more than by anything else ("show me the
+    // books", "only ALCH"), and type is also the pre-filter for the selective recommendation
+    // path in 11 §7 -- the one that deliberately does NOT use the vector index.
+    index('game_records_type_idx').on(t.type, t.source),
+  ],
+);
+
+// One row per embeddable unit -- the thing a search SCANS (11 §4).
+//
+// GRAIN, and it is the same rule as the friction rollup: store at the finest grain that retains
+// the inputs, derive the coarse view. An embedding is a FIXED-SIZE array regardless of input
+// length, so a whole-book vector is the average of everything the book discusses and sits close
+// to none of it. That is collapsing past the grain, and it is unrecoverable without re-embedding.
+//
+// Only BOOKs are chunked (601 of them). INFO/CELL/SPEL/ALCH text is 1-3 sentences -- splitting
+// it shreds meaning rather than sharpening it. Net ~34,000 chunks.
+//
+// Book-level results are a GROUP BY record_id with MAX(score) ("any paragraph about it counts")
+// rather than AVG ("the book must be substantially about it"). That choice is revisitable at
+// QUERY time without re-embedding anything, which is the entire payoff of the fine grain.
+export const gameChunks = pgTable(
+  'game_chunks',
+  {
+    chunkId: text('chunk_id').primaryKey(),  // `${recordId}#${ordinal}` -- derivable, so ingest never needs a sequence
+    recordId: text('record_id')
+      .notNull()
+      .references(() => gameRecords.recordId, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),   // 0 for unchunked records; paragraph index within a book
+    text: text('text').notNull(),
+
+    // --- the semantic half ---
+    //
+    // 384 dims, NOT because 1536 costs more to embed (the whole corpus is ~$0.04 either way)
+    // but because of RESIDENCY. Measured on the live RDS db.t3.micro 2026-07-26:
+    // shared_buffers = 185 MB. At 1536 the raw column alone is ~209 MB -- 113% of the pool
+    // before the index exists. At 384 it is ~52 MB.
+    //
+    // Residency is not a nice-to-have for HNSW specifically: the index is a proximity GRAPH
+    // that is WALKED, so traversal is a serial pointer chase. Each hop's address is unknown
+    // until the previous hop is read, so nothing can be prefetched and nothing can be
+    // parallelised. On RDS every buffer miss is a network round trip to EBS. A btree that
+    // misses costs 3-4 round trips; an HNSW walk that misses costs hundreds, in series.
+    //
+    // 384 is safe rather than lossy because the model is trained with MATRYOSHKA representation
+    // learning -- the loss is applied at multiple prefix lengths, forcing information into the
+    // leading dimensions -- so truncating 1536 -> 384 degrades gracefully. We get a strong model
+    // at a small footprint, not a weak model. Truncating a model NOT trained this way would
+    // produce vectors that still typecheck, still return cosine values, and mean nothing.
+    //
+    // NULLABLE: chunks are written before they are embedded, so a row with a NULL embedding is
+    // "parsed, not yet vectorised" -- a visible, queryable state rather than a missing row.
+    embedding: vector('embedding', { dimensions: 384 }),
+
+    // --- the lexical half ---
+    //
+    // GENERATED, so it cannot drift from `text` and cannot be written inconsistently -- the same
+    // argument as events.suspect/topic.
+    //
+    // The 'english' config is a hard-coded literal and MUST be. Postgres rejects the one-arg
+    // to_tsvector() here because it reads default_text_search_config, a session GUC, which makes
+    // it non-IMMUTABLE. That rejection is the engine enforcing the exact hazard this project
+    // keeps meeting: index one way, query another, get silence instead of an error.
+    //
+    // 'english' over 'simple' was MEASURED (11 §9), not assumed: simple produced 75% more tokens
+    // and the extras were 'the'/'of'/'were'. The feared damage to invented Dunmer names did not
+    // occur -- balmora/dagoth/sadrith/mora are byte-identical under both.
+    //
+    // Stemming does not need to be CORRECT, only SYMMETRIC: 'Cosades' -> 'cosad' is fine because
+    // the query stems identically.
+    tsv: tsvector('tsv').generatedAlwaysAs(sql`to_tsvector('english', text)`),
+
+    // --- idempotency key (11 §8) ---
+    //
+    // Re-running ingest must not re-embed unchanged text, so we skip on a content hash -- the
+    // same technique as migration baselining (09 §7): record the hash, never IF NOT EXISTS.
+    //
+    // ⚠️ THE TRAP, and it is why two more columns exist: a TEXT-ONLY hash silently permits a
+    // model swap. Change the model, re-run, and unchanged text is skipped -- leaving vectors
+    // from two different models in one column, where the distances between them are arbitrary.
+    // No error. Results still return. Rankings quietly wrong. The query side is worse still:
+    // the runtime query vector comes from whatever model is configured NOW, so a swap breaks
+    // search even if not one row is re-embedded.
+    //
+    // The vector is a function of (text, model, dims), so the key must be all three. Skip only
+    // when all three match; a model change then invalidates everything BY CONSTRUCTION, loudly,
+    // for four cents. General rule: an idempotency key must cover every input the cached output
+    // depends on -- not just the one that is obviously "the data".
+    textHash: text('text_hash').notNull(),          // sha256 of `text`
+    embeddingModel: text('embedding_model'),        // e.g. 'text-embedding-3-small'
+    embeddingDims: smallint('embedding_dims'),      // dims AFTER truncation
+  },
+  (t) => [
+    // The three embedding columns are written as one unit. Enforcing that here means a partial
+    // write is impossible rather than merely unlikely -- there is no state where a vector exists
+    // whose provenance is unknown, which is the state the trap above depends on.
+    check(
+      'game_chunks_embedding_provenance_ck',
+      sql`(${t.embedding} IS NULL) = (${t.embeddingModel} IS NULL)
+          AND (${t.embedding} IS NULL) = (${t.embeddingDims} IS NULL)`,
+    ),
+    // Parent-document rollup (GROUP BY record_id) and orphan cleanup during ingest.
+    index('game_chunks_record_idx').on(t.recordId, t.ordinal),
+    // GIN, not GiST: slower to build, faster to search -- the right side of that trade for a
+    // corpus written once and read constantly. Expect a few MB, an ORDER OF MAGNITUDE cheaper
+    // than the HNSW index below. The semantic half is the expensive half; worth knowing which
+    // one you are paying for.
+    index('game_chunks_tsv_idx').using('gin', t.tsv),
+    // vector_cosine_ops because similarity here is ANGLE, not magnitude -- a long book chunk and
+    // a short dialogue line about the same subject must match. (OpenAI returns unit-length
+    // vectors, so cosine and L2 rank identically; we truncate to 384 and RE-NORMALIZE precisely
+    // to keep that true.)
+    //
+    // ⚠️ This index exists to serve the HUMAN SEARCH BOX (11 §1 use case A) and nothing else.
+    // The telemetry-driven recommendation path pre-filters to ~30 rows and scans them exactly:
+    // over 30 candidates, exact KNN is both faster AND correct, so approximate indexing would be
+    // strictly worse. Being able to say why the index is deliberately NOT on the flagship
+    // feature's hot path is the point. If use case A were dropped, this index is dead weight.
+    //
+    // Build/tuning parameters (m, ef_construction, ef_search) are deliberately left at defaults
+    // here: step 7 sweeps them against measured recall@10 and p95, and a guessed value baked
+    // into a migration would be a magic number defended by nothing.
+    index('game_chunks_embedding_hnsw_idx').using(
+      'hnsw',
+      t.embedding.op('vector_cosine_ops'),
+    ),
+  ],
+);
+
+// One row per magic effect on a record -- ONE-TO-MANY (11 §6).
+//
+// This is 06's JSONB-vs-columns debate returning, and the answer is DIFFERENT this time.
+// `events` is JSONB because any third-party mod may invent a payload shape at runtime; that
+// argument does not apply here (MGEF is a fixed 137-entry set defined by the engine). But
+// schema openness is not the blocker. CARDINALITY is:
+//
+//   A generated column is a function of ONE ROW producing ONE VALUE. Skooma has three effects.
+//   `effects->0->>'skill'` can only ever mean "the first effect, whatever that is"; the other
+//   two are simply absent. Widening to effect_1_*, effect_2_*, effect_3_* fails on the spell
+//   with seven. There is no number of columns that is enough, because the number is not fixed.
+//   This is an EXPRESSIBILITY ceiling, not a tuning problem -- no index reaches it.
+//
+// The iteration a one-to-many needs is ROWS. A child table is that loop.
+//
+// ⚠️ And it removes a silent wrong-answer bug. In JSONB, a range predicate over an array can be
+// satisfied by DIFFERENT ELEMENTS than the containment test:
+//
+//   WHERE effects @> '[{"skill":"speechcraft"}]'            -- matched by element 1
+//     AND (effects->0->>'magnitude')::int >= 10             -- matched by element 0
+//
+// Skooma (Strength +20, Speechcraft +1) matches "boosts Speechcraft by 10+". Correctness needs
+// jsonb_path_exists, which GIN cannot index usefully. Here both predicates apply to the SAME
+// ROW, so the false match is structurally impossible:
+//
+//   WHERE affected = 'speechcraft' AND magnitude_min >= 10
+//
+// Note the inversion of the usual intuition: a new effect TYPE is a new ROW here, but new DDL
+// in the generated-column design. The flexibility JSONB is normally chosen for is, in this
+// shape, better served by normalizing.
+export const recordEffects = pgTable(
+  'record_effects',
+  {
+    recordId: text('record_id')
+      .notNull()
+      .references(() => gameRecords.recordId, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),         // effect order as the record declares it
+    effectId: integer('effect_id').notNull(),      // MGEF index
+    effectName: text('effect_name').notNull(),     // 'Fortify Skill', 'Restore Health', ...
+    affected: text('affected'),                    // 'speechcraft' | 'strength' | NULL when the effect targets neither
+    affectedKind: text('affected_kind'),           // 'skill' | 'attribute' | NULL -- disambiguates ids that collide across the two enums
+    magnitudeMin: integer('magnitude_min'),
+    magnitudeMax: integer('magnitude_max'),
+    duration: integer('duration'),
+    range: text('range'),                          // 'self' | 'touch' | 'target'
+  },
+  (t) => [
+    primaryKey({ columns: [t.recordId, t.ordinal] }),
+    // The pre-filter for 11 §7's use case B: "what could serve a Speechcraft check at magnitude
+    // >= 10". Selective (~30 rows of ~34,000), which is exactly why that path skips the vector
+    // index -- selectivity is the deciding variable, the same quantity as seq-scan-vs-index-scan.
+    index('record_effects_affected_idx').on(t.affected, t.magnitudeMin),
+  ],
+);
