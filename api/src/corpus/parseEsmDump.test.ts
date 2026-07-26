@@ -211,10 +211,37 @@ test('INGR: "Invalid (-1)" is never written through as a target', () => {
 });
 
 test('INFO inherits its display name from the preceding DIAL', () => {
-  const info = byId.get('30643123741319511643')!;
+  const info = byId.get('A1_6_AddhiranirrInformant#30643123741319511643')!;
   // Without this the UI renders a search hit as '30643123741319511643'.
   assert.equal(info.name, 'A1_6_AddhiranirrInformant');
   assert.match(info.fullText, /^I'm told that Addhiranirr is hiding/);
+});
+
+// ⚠️ REGRESSION: an INFO id is unique only WITHIN its topic. 99 ids repeat across topics in
+// Morrowind.esm, so keying on the bare id silently merges unrelated dialogue -- and Postgres
+// only complains (21000) because the batch happens to contain both in one statement.
+test('INFO ids are keyed by topic, so the same id under two topics does not collide', () => {
+  const dump = `Record: DIAL "attack on a guar hide trader"
+Record flags: [None] (0x00000000)
+  Deleted: 0
+
+Record: INFO "12345"
+  Text: The first version of the rumour.
+  Deleted: 0
+
+Record: DIAL "Attack on guar hide trader"
+Record flags: [None] (0x00000000)
+  Deleted: 0
+
+Record: INFO "12345"
+  Text: The second version, under a topic differing only in case.
+  Deleted: 0
+`;
+  const { records } = parseEsmDump(dump);
+  assert.equal(records.length, 2);
+  assert.equal(new Set(records.map((r) => r.recordId)).size, 2, 'ids must not collide');
+  assert.match(records[0].fullText, /first version/);
+  assert.match(records[1].fullText, /second version/);
 });
 
 test('BOOK: block text is captured, markup stripped, paragraphs preserved', () => {

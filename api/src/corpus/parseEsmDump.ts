@@ -193,8 +193,18 @@ export function parseEsmDump(dump: string): ParseResult {
       flush();
       pendingBlock = false;
       const [, type, quotedId] = rec;
-      const recordId = quotedId ?? '';
+      let recordId = quotedId ?? '';
       if (type === 'DIAL') currentDial = recordId;
+      // ⚠️ AN INFO ID IS NOT GLOBALLY UNIQUE -- it is unique only WITHIN its dialogue topic.
+      // 99 of Morrowind.esm's INFO ids repeat across topics (one pair of topics differs only in
+      // capitalisation: 'attack on a guar hide trader' vs 'Attack on guar hide trader'), which
+      // means the esmtool id is NOT the natural key doc 11 §6 assumed. Adding the parent topic
+      // resolves every collision -- verified, 0 remaining.
+      //
+      // Caught by Postgres refusing the batch (21000: "ON CONFLICT DO UPDATE cannot affect row
+      // a second time"), not by anything in the parser. A plain insert would have accepted the
+      // duplicates and quietly kept whichever arrived last.
+      if (type === 'INFO' && currentDial) recordId = `${currentDial}#${recordId}`;
       current = {
         recordId,
         type,
