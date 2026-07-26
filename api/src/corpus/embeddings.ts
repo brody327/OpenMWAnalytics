@@ -37,6 +37,13 @@ function normalize(v: number[]): number[] {
  * is itself a usable embedding. But lopping off 1,152 of 1,536 numbers destroys unit length,
  * and the rest of the system assumes unit vectors (it is what makes cosine and L2 rank
  * identically). Re-normalizing restores the property rather than hoping nothing depended on it.
+ *
+ * ⚠️ CHANGING THIS FUNCTION REQUIRES A FULL RE-EMBED. The stored vector is a function of
+ * (text, model, dims, AND this transform), but the idempotency key covers only the first three.
+ * Alter the truncation or normalization here and unchanged text will still be skipped, leaving
+ * vectors produced by two different transforms in one column -- the model-swap trap wearing a
+ * different hat. This is deliberately code rather than configuration: it cannot drift via an
+ * env var, so breaking it takes an edit, and the edit meets this comment.
  */
 export function truncateAndNormalize(v: number[], dims: number): number[] {
   return normalize(v.slice(0, dims));
@@ -44,10 +51,45 @@ export function truncateAndNormalize(v: number[], dims: number): number[] {
 
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Native output width per model -- the width we REQUEST before truncating.
+ *
+ * This is a lookup rather than a constructor option on purpose. It used to be configurable
+ * (`requestDims`), which opened a silent-corruption hole: embedding at 1536 and truncating to
+ * 384 does not produce the same vector as embedding at 3072 and truncating to 384, yet both
+ * store model='text-embedding-3-small', dims=384. Identical provenance, different vectors, no
+ * error -- and unlike a width change, the fixed-width column cannot catch it either.
+ *
+ * Deriving it from the model closes the hole BY CONSTRUCTION instead of adding a fourth key
+ * column to guard a knob nobody needed: the only legitimate reason to change the request width
+ * is changing models, and a model change already invalidates the key. Requesting less than the
+ * native width is strictly worse than truncating from it -- a shorter, less informative source
+ * for no benefit.
+ *
+ * Step 7's dims sweep is unaffected: it truncates ONE set of stored 1536-dim vectors locally via
+ * truncateAndNormalize. It varies the STORED width, never the requested one -- re-requesting
+ * would mean re-embedding, which is exactly what "four cents buys the whole table" avoids.
+ */
+const NATIVE_DIMS: Record<string, number> = {
+  'text-embedding-3-small': 1536,
+  'text-embedding-3-large': 3072,
+};
+
+export function nativeDimsFor(model: string): number {
+  const dims = NATIVE_DIMS[model];
+  // Throw rather than defaulting: a silent fallback to 1536 for a model whose native width is
+  // something else re-creates a quieter version of the bug this lookup exists to remove.
+  if (!dims) {
+    throw new Error(
+      `Unknown embedding model '${model}'. Add its native width to NATIVE_DIMS -- ` +
+      'guessing one would silently change every vector it produces.',
+    );
+  }
+  return dims;
+}
+
 export interface OpenAIEmbeddingOptions {
   apiKey: string;
-  /** Embed at this width, then truncate. 1536 is retained so step 7 can sweep dims from ONE run. */
-  requestDims?: number;
   /** Stored width. 384 keeps the HNSW index resident in a 185 MB shared_buffers (11 §5). */
   dims?: number;
   model?: string;
@@ -74,7 +116,9 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? 'text-embedding-3-small';
     this.dims = opts.dims ?? 384;
-    this.requestDims = opts.requestDims ?? 1536;
+    // Derived, not configurable -- see NATIVE_DIMS. Resolved in the constructor so an unknown
+    // model fails at construction rather than partway through a 28,000-text ingest run.
+    this.requestDims = nativeDimsFor(this.model);
     this.batchSize = opts.batchSize ?? 100;
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }

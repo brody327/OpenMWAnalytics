@@ -143,27 +143,9 @@ test('a dims change invalidates the key AND is refused by the column', { skip: s
   assert.deepEqual(dims.map((r) => r.d), [384]);
 });
 
-// ⚠️ THE GAP THIS TEST EXISTS TO PIN DOWN. The vector is a function of
-// (text, model, requestDims, storedDims, normalization) -- but the key only covers
-// (text, model, storedDims). `requestDims` is the width we ask OpenAI for BEFORE truncating.
-// Embedding at 1536 and truncating to 384 does NOT give the same vector as embedding at 3072
-// and truncating to 384, yet both store model='text-embedding-3-small', dims=384.
-//
-// So the model-swap trap has a sibling that the current key does NOT catch, and the column
-// width cannot catch it either because the stored width is identical. Same failure shape,
-// one level down: no error, results still return, rankings quietly wrong.
-test('KNOWN GAP: requestDims is an input to the vector but not to the key', { skip: skip() }, async () => {
-  const wide = new FakeEmbeddingProvider({ model: 'same-model', dims: 384 });
-  await run(CORPUS, wide);
-
-  // A provider with identical declared provenance but different upstream configuration.
-  const rerun = new FakeEmbeddingProvider({ model: 'same-model', dims: 384 });
-  const stats = await run(CORPUS, rerun);
-
-  // Documented, not celebrated: everything is skipped purely because model+dims match.
-  assert.equal(stats.textsEmbedded, 0);
-  assert.equal(stats.chunksSkipped, stats.chunksTotal);
-});
+// (The former "KNOWN GAP: requestDims is not in the key" test lived here. The gap is now closed
+// by construction -- the request width is derived from the model rather than configurable -- so
+// it is pinned in embeddings.test.ts against the real provider instead of documented here.)
 
 test('every stored vector carries its provenance (the CHECK constraint)', { skip: skip() }, async () => {
   await run(CORPUS, new FakeEmbeddingProvider());
