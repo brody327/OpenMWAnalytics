@@ -102,6 +102,42 @@ Without exposure:
 **Structural consequence:** the highest-leverage *new* event class is exposure, not
 more attempt detail.
 
+#### 3.2a — A mechanism for exposure, identified 2026-07-25 (designed nowhere yet)
+
+The claim *"you cannot emit an event for something that didn't happen"* is true and was too
+strong a conclusion. **You can emit one for the bounded window in which the non-event occurred,
+provided the choice set is enumerable** — which is exactly what CCFF's **inspect panel** is:
+
+```
+panel opened  →  the available skill checks are enumerable  →  panel closed
+                 whatever was not attempted was DECLINED
+```
+
+That is the standard **impression → action** pattern, and it supplies the denominator this
+section says we lack. The prize is the 2×2:
+
+| | attempted | **declined** |
+| --- | --- | --- |
+| **threshold met** | routine | didn't want the outcome |
+| **threshold not met** | failure prose is **read** | **deterred — prose never seen** |
+
+⚠️ **Four things to settle before designing it** (feasibility gate first):
+
+1. **Does the panel code know, at open time, which checks exist *and* whether the threshold is
+   met?** A code read decides whether the full 2×2 is buildable or only the top row.
+2. **Grain is per-check, not per-panel** — 3 checks with 1 attempt = 1 attempt + **2** declines.
+3. **Dedupe repeat opens** (probably first-open-per-session) or the decline rate inflates.
+4. **Name the field `check_displayed`, not `check_seen`** — rendered ≠ read. Put the viewability
+   limitation in the schema, not in a footnote.
+
+⭐ **This also fixes a blind spot in 4a's ranking** (`07 §7`): `stuck_score` uses `attempts` as its
+volume term, so a check nobody attempts scores ≈ 0 — indistinguishable from one that doesn't
+exist. Exposure separates *"everyone fails this"* from *"nobody even tries this"*, which are
+different problems with different fixes.
+
+Status: **mechanism identified, nothing designed or built.** Module 2 below remains unanswerable
+today; it is no longer unanswerable *in principle*.
+
 ### 3.3 Honesty about sample size
 
 The current population is **one player, who is also the author**. Rates over n=1 are
@@ -227,6 +263,12 @@ The module authors most consistently underestimate, and the one with the highest
 | 2.2 | Of players who reach X, how many engage? | is the hook working | engaged ÷ exposed | `ConfrontationTopicEntered` ÷ `ConfrontationAttempted` | 🔵 designed |
 | 2.3 | Which optional/alternate routes get used? | is the branching worth it | route share | exposure + route id | ❌ |
 | 2.4 | Do players find the evidence needed for a check they failed? | discovery problem vs. reasoning problem | possession-at-attempt | `EvidenceCollected` × `ConfrontationAttempted.evidence_ids` | 🔵 designed |
+| 2.5 | **Is the bespoke failure prose ever read?** | **where to spend authoring bandwidth** | declined ÷ displayed, split by threshold-met (§3.2a's 2×2) | inspect-panel exposure event (**not designed**) | ❌ |
+
+**2.5 is new (2026-07-25, learner's question) and is the most unusual question in the inventory** —
+it is about where to spend *human effort*, not where players struggle. If players who cannot pass a
+check mostly never attempt it, the hand-written failure branches are largely unread and that
+bandwidth belongs elsewhere. Blocked on §3.2a's exposure mechanism.
 
 **2.4 is the sharpest question in this module.** A failed confrontation where the
 player never found the required evidence is a *discovery* bug; the same failure with
