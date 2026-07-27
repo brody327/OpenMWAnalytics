@@ -566,6 +566,93 @@ FROM lex FULL OUTER JOIN vec USING (chunk_id) ORDER BY rrf DESC LIMIT 10;
 
 ---
 
+## 10a. Step 7 — index tuning + measurement (MEASURED 2026-07-26)
+
+Harness: `api/src/corpus/benchRecall.mts` (`npm run bench-recall`). 80 out-of-distribution queries,
+`k = 10`, 36,567 chunks, real `text-embedding-3-small@384` vectors, local PG16.
+
+### How recall is measured when the index is approximate by design
+
+**Exact KNN is the ground truth.** Disable index scans, let Postgres brute-force the true top-k
+over every vector — slow, but correct by definition. Run the same query through HNSW and take the
+**set overlap**. No external label set is needed: the database can always tell you the right
+answer, just expensively.
+
+`recall@10` is a **set** metric, order-insensitive. That is the right choice here for a
+non-obvious reason: **HNSW's approximation is in *which* items it finds, not how it orders them.**
+Distances are computed exactly for every candidate, so the returned k are perfectly ranked among
+themselves — a rank-aware metric (NDCG@10) would largely track recall and add nothing.
+
+### The curve
+
+| `ef_search` | recall@10 | buffers | p50 ms |
+| --- | --- | --- | --- |
+| 10 | 79.9% | 364 | ~5–8 |
+| 20 | 84.6% | 523 | ~2.2 |
+| **40** *(pgvector default)* | **89.3%** | 844 | ~2.6 |
+| **80** ⭐ | **91.6%** | 1,362 | ~2.0 |
+| 160 | 91.8% | 2,558 | ~2.4 |
+| 320 | 92.6–93.3% | 4,452 | ~3.4 |
+| **exact KNN** | 100% *(by definition)* | **41,509** | **27–34** |
+
+**Recommendation: `hnsw.ef_search = 80`.** +2.3 points of recall over the default for 1.6× the
+buffers, still **30× cheaper than exact**. Past 80 it flattens hard — 160 buys +0.2 points for 1.9×
+the work. Not applied yet; it is a session/queryable GUC, so it belongs with the search endpoint.
+
+**Recall never reaches 100%**, even at `ef_search = 320` (a candidate list ~1% of the corpus). The
+greedy walk can settle in a region of the graph from which some true neighbours are unreachable,
+and more candidates do not help if the traversal never goes there.
+
+⚠️ **`ef_search = 10` with `k = 10` is structurally the worst case** (79.9%): pgvector clamps
+`ef_search` to at least `k`, so the candidate list has **zero slack** — every candidate the walk
+finds is returned, with no chance to evict a worse one for a better one discovered later.
+
+### ⚠️ Trust buffers, not milliseconds
+
+Across two identical runs, **buffer counts were bit-identical** while p50 swung up to 60% (5.18 →
+8.19 ms at `ef_search=10`, which ran first and absorbed cache warming). At 1–5 ms, wall-clock is
+noise. Buffers are deterministic work, are perfectly monotonic in `ef_search`, and are what
+predicts **RDS** behaviour, where pages are not resident and each miss is a network round trip.
+
+### The seq scan pays a cost the index skips entirely: TOAST
+
+41,509 buffers for a "58 MB" table looked wrong, and was worth chasing. `game_chunks` is 58 MB heap
+**plus 19 MB TOAST**; `embedding` has `avg_width` 1,071 (compressed from 1,544) and is stored
+externally. So exact KNN reads ~7,400 heap pages **and then does a per-row detoast fetch for
+~30,000 vectors**.
+
+> HNSW stores vectors inside its own pages and the query projects only `chunk_id`, so the fast path
+> **never detoasts at all.** The index is not merely touching fewer pages — it avoids an entire
+> access pattern.
+
+**Deliberately NOT tuned.** `ALTER COLUMN embedding SET STORAGE PLAIN` would eliminate the detoast,
+but the only full scans are this benchmark's ground truth and use case B's ~30-row pre-filtered
+path, where 30 detoasts are free. It would speed up nothing a user touches. Recorded, not actioned.
+
+### ⚠️ Two methodology bugs, both of which produced clean, plausible, entirely fake tables
+
+1. **Query vectors sampled FROM the indexed corpus.** A corpus point's true top-10 neighbours are
+   precisely the nodes HNSW linked it to at build time, so the graph is asked to find the
+   neighbours it was constructed from. Result: **100% recall at every `ef_search`**, including 10.
+   Queries must be out-of-distribution.
+2. **`SET LOCAL` outside a transaction block is a WARNING and a no-op.** So `enable_indexscan=off`
+   never applied and neither did any `hnsw.ef_search`: all seven rows were the same query (HNSW at
+   the default 40) compared against itself. The tell was **identical buffer counts across
+   supposedly different plans**.
+
+> The fix that generalises: **the harness now asserts which plan actually ran** (`Seq Scan` for
+> ground truth, `hnsw` for the approximate path) and fails loudly otherwise. Measuring without
+> checking what executed is how you get a confident table of numbers about nothing.
+
+### Not done
+
+- **The dims sweep** (`384 / 512 / 768 / 1536`). ⚠️ Doc §5 claimed one embedding run would cover it,
+  but **ingest stores only the truncated 384** — the 1536-dim source is discarded. A sweep needs a
+  bench table holding full-width vectors and a re-embed (~$0.026).
+- **`m` / `ef_construction`** — build-time parameters, so each value needs a full index rebuild.
+
+---
+
 ## 11. What is built, and what is next
 
 ### Built 2026-07-26 — `api/src/corpus/`, branch `feat/corpus-ingest`
@@ -595,15 +682,16 @@ block of HTML-ish markup, and the corpus genuinely contains script comments like
 
 ### Not yet done
 
-- 🚨 **A real embedding run.** The database holds **fake** vectors: deterministic, searchable, and
-  semantically meaningless. **Every recall, ranking and quality number is invalid until this runs**
-  (~$0.026, needs `OPENAI_API_KEY`).
-- **Step 7 — index tuning + measurement.** The dims sweep (`dims × index size × recall@10 × p95`),
-  `hnsw.ef_search` / `m` / `ef_construction`, and how recall is measured at all — **exact KNN as
-  ground truth**, i.e. what fraction of the true top-k the approximate index returned. This is the
-  Postgres-performance payoff and the reason the phase was sequenced first. Blocked on the real run.
+- ✅ **Real embedding run DONE 2026-07-26** — 28,253 texts, 152 s, ~$0.026, `text-embedding-3-small`
+  at 384 dims. Exactly one model in the column, 0 provenance violations. **The model-swap guard
+  fired live**: every fake vector was invalidated by construction (`chunks skipped 0`).
+- ✅ **Step 7 — `ef_search` curve MEASURED**, see §10a. ▶ Remaining: the dims sweep (needs a bench
+  table + re-embed, because ingest discards the 1536-dim source) and `m` / `ef_construction`.
 - **Step 8 — dashboard view + synthetic seeding** (see [[project-synthetic-data-policy]]:
-  `env='synthetic'`, banner, never a truncate).
+  `env='synthetic'`, banner, never a truncate). ⚠️ First finding from the live demo: results can
+  contain **duplicate text under different records** (the same stock line under two topics), so the
+  UI needs to dedupe or group.
+- **Apply `hnsw.ef_search = 80`** at the search endpoint (§10a) — a GUC, not a migration.
 - **Deployment.** ✅ `CREATE EXTENSION vector` is permitted on RDS and lives in migration `0005`
   (`09 §7`'s initContainer). Ingest stays local by necessity — the `.esm` files cannot leave the
   machine — so **production's corpus is populated by running ingest against the RDS URL**, which is
