@@ -1721,3 +1721,106 @@ ML where a heuristic does**. So the teaching frame is not "how to prompt" — it
   résumé bullet fully true. Interviewers probe bullets.
 - Synthetic seeding for the **telemetry** views (`project-synthetic-data-policy`) — never needed for
   search, which runs on real corpus data.
+
+---
+
+## 2026-07-27 (part 3) — the day the theme stopped being a theme and became a method
+
+The 07-26 plan named one lesson to teach explicitly: *"looks right" and "is right" are
+indistinguishable without an independent check.* It was scheduled as a lecture. Instead the day
+produced **nine** instances, **three of them the mentor's own**, and the lesson taught itself.
+
+### The full ledger
+
+| # | failure | why it was invisible | what caught it |
+| --- | --- | --- | --- |
+| 1 | `ItemUsage` cannot see quick-keys / AI / mwscript potion use | fewer rows, no error, plausible counts | reading the API's own caveat, then **testing the quick-key path deliberately** |
+| 2 | `activeEffects:getEffect(FortifyAttribute, …)` is blind to drains | returns nothing = "no boost", identical to genuinely unboosted | the 0.51 docs exposing `base/modified/modifier/damage`; confirmed by Skooma's **−20 Agility** |
+| 3 | prod pod 45 min older than the code | 404 on **one route**; `/health` green | curling the *specific* new route |
+| 4 | `OPENAI_API_KEY` absent so search served `mode:'lexical'` | real, relevant, half-a-feature results | **semantic-only hits** — impossible from the lexical half |
+| 5 | shipper dead 6 days | every signal green; the API *was* fine | a human noticing prod's newest event was stale |
+| 6 | ⭐ **mentor's**: install-id scan window 26× too small | parsed cleanly, threw nothing, returned `null`; `shippers: []` looks like "not started yet" | probing the assumption directly — 64 KB yielded **0** telemetry lines |
+| 7 | `Stop-ScheduledTask` orphans the node child, giving **two** shippers | `IgnoreNew` governs the task, not a grandchild | listing processes instead of trusting the task state |
+| 8 | ⭐ **mentor's**: "corrected" doc 11 from 3 effects to **2**, matching corrupt data | the database agreed with the edit | the game contradicting both |
+| 9 | ⭐⭐ **test fixture overwriting real corpus records** | 48 tests green — they assert rows the fixture itself defines | **contradiction between two independent observations** |
+
+### The four techniques, now a method rather than anecdotes
+
+1. **Conservation counts** — N in, N out, classified. ⚠️ **And across the stage boundary that
+   persists, not only within a stage.** Every check in this project lived *inside* the parser;
+   nothing compared Postgres to the `.esm`. That gap is bug #9, and `verify-corpus` is ~90 lines.
+2. **Assert what actually ran** — the plan, the constraint, the process list.
+3. **Mutation checks** — break it, confirm the test notices. Bugs #6 and #9 both looked fine while
+   returning nothing and asserting nothing respectively.
+4. ⭐ **NEW, and the day's real contribution: pick a check that CANNOT PASS under the failure you
+   fear.** Not "does it work" but "what observation is *impossible* if the thing I fear is true?"
+
+| fear | the discriminating check |
+| --- | --- |
+| the seam cannot see quick-key usage | drink a potion **from the hotkey** |
+| prod silently degraded to lexical-only | find a hit with `lexical_rank: null` |
+| the supervision fix does not actually restart | **kill the process** and watch |
+| the alert endpoint works but nobody is told | **induce a real outage** and wait for the phone |
+| the corpus disagrees with the game | join telemetry to it and look for a contradiction |
+
+Every one of those was run. Four of them found something.
+
+### ⭐ Bug #9 is the teaching artefact — keep it
+
+`ingest.test.ts` used **real record ids** for realism. `record_id` is the primary key, so every
+`npm test` upserted the fixture over the genuine rows. Skooma's four effects became two.
+
+- **It recurred on every test run.** Not a one-off — the mentor re-triggered it twice that day.
+- **The 07-26 fix was insufficient in a way that reads as sufficient.** Source-scoping stopped tests
+  *deleting* real data. It could never stop them *overwriting* it, because **a shared primary key
+  does not care about the `source` column.** A fix aimed at the symptom you noticed looks complete
+  until the other half of the class shows up.
+- **It was caught by contradiction, not inspection.** Telemetry said `strength +20`; the corpus said
+  Skooma has no Strength effect. Both internally consistent; only *against each other* wrong.
+- ⭐ **The synthesis layer found a bug in its own foundation on first real use.** That is the
+  strongest available argument for building 4c's telemetry × corpus join at all — and it is an
+  interview story, not merely a fix.
+
+### Learner-driven work — logged as JUDGMENT, not quiz scores
+
+Four `/search` UI decisions plus several instrumentation decisions, learner making each call. Twice
+they beat the answer being fished for, and once they corrected the mentor's framing outright:
+
+| decision | learner's reasoning |
+| --- | --- |
+| submit-only search | derived **filter vs query** unprompted; then *"if we're debouncing that much, we might as well submit"* |
+| `router.push` | rejected the question's framing — reload cost is **additive** with the embedding round-trip, not an alternative |
+| clear results while loading | ⭐ from *trigger semantics*: an explicit submit means the old set is dead, and stale results post-submit are **indistinguishable from a finished search** |
+| accept cold latency | same principle applied — staged streaming reorders results under the reader |
+| `SkillCheckDisplayed` grain | independently re-derived `10 §3.2a`'s per-check decision, and rejected a panel id on *"don't store what we won't use"* |
+| `statDetail` shape | *"morph the data to support the needs, as opposed to consistency when it counts"* |
+| **`n=1`** | ⛔ shut down a question the mentor had re-raised across sessions: *faking data demonstrates the SYSTEM works, not that the problem is real* |
+
+⚠️ **Mentor correction to carry forward:** `n=1`/synthetic data was **already decided** and got
+re-litigated at the start of a new feature. Apply the standing policy silently; do not reopen it.
+
+### ▶ Assessment debt
+
+**Nothing was formally quizzed after the opening check.** The session ran on learner-driven
+decisions, which is the stronger signal for *judgment* but leaves *recall* unmeasured. Open: 07-25
+concepts 6, 7, 10; TOAST/detoasting; out-of-distribution query construction; and the new material —
+liveness vs freshness, single-row liveness tables, the discriminating-check technique, and why a
+shared primary key defeats source scoping.
+
+### ▶ Plan for 4c (supersedes the earlier 4c note in this file)
+
+The data layer is **complete and verified**: `ItemConsumed` + `SkillCheckDisplayed` +
+`base_value`/`stat_modifier`/`stat_damage`, joined to `record_effects`, with attribution proven
+(`skill_value − base_value` equals the fortify magnitude).
+
+1. **Open with ~4 questions** from the debt list above — prediction / explain-back / transfer,
+   never multiple choice.
+2. **Build the Q3.6 SQL BEFORE any LLM touches it.** *"Players fail this Personality gate, nobody
+   boosted, and here is every item in the game that could have"* is a
+   `WHERE affected='personality' AND magnitude_min >= n` join. Seeing exactly how far the heuristic
+   gets **is** the "why not just a heuristic" answer, and it has to be measured, not asserted.
+3. ⚠️ **Then the hard part: an LLM produces fluent, plausible, confident output BY CONSTRUCTION.**
+   Every failure this session had a tell — a count that would not reconcile, a 404, a contradiction.
+   Generated prose has none. **Decide the independent check before writing the prompt.** What
+   observation would be impossible if the insight were wrong? If there is no answer, the feature is
+   not ready to build.

@@ -796,3 +796,36 @@ run. A partial change costs only its own rows — enriching item text touched 2,
 Orphan sweeps are now scoped `WHERE source = $source`, the test owns its own `source`, and a
 regression test asserts two sources survive each other. **General rule: "delete everything not in
 my input" is only safe if you actually own everything.**
+
+---
+
+## `shipper_state` (added 2026-07-27, migration `0006`)
+
+```
+shipper_state
+  install_id        uuid PK      ← ONE ROW PER INSTALL, UPSERTed. Never appended.
+  last_seen_at      timestamptz
+  last_shipped_seq  integer
+  shipper_version   text
+```
+
+**Why a table and not an event.** `03` retired the original `Heartbeat` *type* for two reasons that
+both apply here: 1,049 heartbeats against 11 real events bloated storage, **and** corrupted sequence
+analysis — `LEAD()` over the stream reported *"players respond to failure by idling"*, an
+instrumentation artifact presented as behaviour.
+
+Keyed by `install_id`, this table is bounded by **how many people run the mod**, never by how long
+they run it. At n=1 it is literally one row, forever. It is also structurally invisible to every
+sequence query, because it is not in `events` at all. That is the distinction `03` was really
+complaining about: **ops liveness and product telemetry are different concerns that had been mixed
+into one stream.**
+
+⭐ **Same shape as `friction_fold_state`, for the same reason.** Both answer *"when did this thing
+last SUCCEED"*, which is a different question from *"when did it last find work."* Deriving
+freshness from `max(events.received_at)` fails identically to deriving rollup lag from
+`max(rolled_at)`: the timestamp only advances when there is work, so a quiet period is
+indistinguishable from an outage. The fix, twice now, is a dedicated liveness row.
+
+**`last_shipped_seq`** lets *alive but stuck* be separated from *alive and idle* — a shipper that
+keeps checking in while its offset never advances is a different failure from one with nothing to
+send. Nullable, and `COALESCE`d on update so a heartbeat that omits it cannot erase a known value.

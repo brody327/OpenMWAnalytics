@@ -271,3 +271,52 @@ affected. Options if it ever matters: document expansion with domain synonyms, o
 
 **Production has no `OPENAI_API_KEY`**, so `/search` there reports `"mode": "lexical"` until one is
 added to the k8s Secret (`09 §2`).
+
+---
+
+## `GET /ops/freshness` + `POST /ops/heartbeat` — pipeline monitoring (added 2026-07-27)
+
+Built after telemetry went **silently dark for six days** (`04`). The API was healthy throughout
+and `/health` was right to be green — the failure was two hops upstream, in a process on a Windows
+laptop.
+
+| route | auth | purpose |
+| --- | --- | --- |
+| `POST /ops/heartbeat` | ✅ ingest token | the shipper saying "I am alive", with or without events |
+| `GET /ops/freshness` | ❌ open, like `/stats/*` | **503** when any shipper is stale, 200 when all are current |
+
+### ⚠️ Why this is NOT part of `/health`, and why that separation is load-bearing
+
+`k8s/deployment.yaml` wires `/health` to **both** `livenessProbe` and `readinessProbe`. A non-200
+there means *"restart this pod and pull it from the Service."* Folding staleness in would make
+Kubernetes restart the API — repeatedly — for a condition it neither causes nor can fix. **A dead
+shipper on a laptop would crashloop production**, an outage manufactured entirely by its own
+monitoring.
+
+> **Liveness asks "should this process be restarted?" Freshness asks "is the data trustworthy?"**
+> They must never share a route, because exactly one of them has a destructive remediation wired to
+> it.
+
+Verified during the induced outage: `/ops/freshness` returned 503 while `/health` stayed 200 and
+k8s did nothing.
+
+### Why 503 rather than `200 {"ok":false}`
+
+The consumer is a dumb external uptime monitor that understands status codes and nothing else. The
+endpoint is not the monitoring — **the thing that polls it is** — and a checker nobody reads would
+have missed the six-day outage exactly as completely as no checker at all.
+
+### Design notes
+
+- **An empty `shipper_state` returns 503, not 200.** "Nothing has ever checked in" is not healthy;
+  greening on absent data is how a monitor silently monitors nothing.
+- **A failure to *assess* freshness is also 503.** Returning 200 when the query throws would make a
+  broken database read as a healthy pipeline — the exact failure this endpoint exists to remove.
+- **`newest_event_at` is reported but never alerted on.** `max(received_at)` only advances when
+  someone *plays*, so in a quiet period it grows without bound and a healthy pipeline looks broken
+  (`frictionFoldState`'s lesson, one layer up). *"Is the shipper alive"* and *"is anyone playing"*
+  are different questions; only the first is an outage.
+- **Heartbeat is authenticated** because it writes. An open route would let anyone forge *"the
+  pipeline is fine"* — the one lie that would defeat the whole mechanism.
+- `install_id` is validated as a UUID (400 otherwise); `COALESCE` on update means a heartbeat that
+  omits a field cannot **erase** a known one.

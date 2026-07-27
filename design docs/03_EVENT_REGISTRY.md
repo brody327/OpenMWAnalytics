@@ -5,9 +5,15 @@
 `EvidenceCollected` (9 events vs 9 discovery log lines — exact 1:1, and the first
 **global-context** SDK consumer working), + `evidence_ids` and `claim_index` on
 `ConfrontationAttempted` (arrays of length 1–3 land as jsonb `array`; `claim_index` as
-`number`; `reason` correctly omitted on pass). **Designed, not implemented:**
-`SkillCheckResolved`, `PuzzleAttempted`. **Retired + confirmed gone from the log:**
-`SpikeStarted`, `Heartbeat`.
+`number`; `reason` correctly omitted on pass).
+**Verified live 2026-07-27:** `ItemConsumed` (first-party, `mod_id='base'`, incl. the quick-keys
+path `ItemUsage` could not have seen), `SkillCheckDisplayed` (3 checks per open, hover repaints
+correctly silent, `check_id` joins exactly to `SkillCheckResolved`), and `SkillCheckResolved`'s
+additive **`base_value` / `stat_modifier` / `stat_damage`** — proven on an attribute check where
+Skooma carried the player from base 20 to 40 against a threshold of 40, i.e. *the boost was the
+only reason it passed*. **Designed, not implemented:** `PuzzleAttempted`.
+**Retired + confirmed gone from the log:** `SpikeStarted`, `Heartbeat` — but see `06`
+`shipper_state`, which reinstates *ops* liveness as a **single-row table**, never an event.
 
 This is the **governed vocabulary** half of the "generic transport, governed
 vocabulary" split (`02 §6`). The transport accepts *any* `type`; this doc decides
