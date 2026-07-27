@@ -139,3 +139,61 @@ up. Ordering is only fragile exactly once.
   current volumes; cap if a single poll could produce a huge batch.
 - **Backpressure / on-disk queue** — the log *is* the durable buffer; if the API is down
   the events simply wait in `openmw.log`. No separate spool needed.
+
+---
+
+## ⚠️ THE SIX-DAY SILENT OUTAGE (2026-07-20 → 07-27) — supervision, not monitoring
+
+**What happened.** The shipper's Scheduled Task last *started* on **2026-07-20 19:06**, exited with
+`LastTaskResult 0xC000013A` (`STATUS_CONTROL_C_EXIT`), and never ran again. Prod's newest event was
+**2026-07-21 00:14 UTC** — six days stale. Nobody noticed. Nothing alerted.
+
+⭐ **`/health` was green the entire time, and was right to be.** The API was healthy; the database
+was healthy; the *pipeline* was dead. Liveness of a service says nothing about liveness of the flow
+through it — the failure was two hops upstream of everything being watched, on a Windows box.
+
+### The diagnosis: it WAS configured to restart itself, and that was not enough
+
+| setting | value | verdict |
+| --- | --- | --- |
+| `MultipleInstances` | `IgnoreNew` | ✅ |
+| `RestartCount` / `RestartInterval` | `3` / `1 min` | ⚠️ **restarts on failure — three times, then stops forever** |
+| `ExecutionTimeLimit` | `PT0S` (none) | ✅ |
+| **trigger** | **logon only, no repetition** | ❌ **the gap** |
+
+It failed, retried three times a minute apart, exhausted them, and then **nothing was ever going to
+try again until the next logon.** A task that is technically self-restarting and still stays dead
+for six days.
+
+### The fix (applied + VERIFIED 2026-07-27)
+
+A second trigger: `-Once` with `-RepetitionInterval 15 min` and **no duration** (an empty duration
+is how Task Scheduler encodes *indefinitely*; `[TimeSpan]::MaxValue` serialises to
+`P99999999DT23H59M59S` and is rejected outright).
+
+`MultipleInstances = IgnoreNew` is what makes this safe: the repeat is a **no-op while the shipper
+is running** and a **restart when it is not**. Self-healing supervision, two lines of config.
+
+⭐ **Verified by breaking it, not by reading it.** Interval temporarily set to 1 minute, the running
+shipper killed (PID 47592), and the task observed bringing it back (PID 25856) ~60 s later; interval
+then restored to 15 minutes. The settings table above *looked* correct before the fix too — only
+killing it distinguishes a supervision policy that works from one that merely parses.
+
+**No data was lost.** The shipper keeps a durable offset and is at-least-once, so restarting resumed
+from where it stopped: the six-day backlog, including that day's test events, shipped on restart.
+The design's own reliability property is what turned a six-day outage into a delay.
+
+### ▶ What this does NOT fix, and why monitoring is still warranted
+
+Supervision handles *the process died*. It cannot see: the machine being off, the network being
+down, the API rejecting every batch, or the shipper running but stuck. Those need a freshness
+signal with an **external** notifier — a check nobody polls would have missed this outage exactly as
+completely as no check at all.
+
+⚠️ **Freshness must NOT be folded into `/health`.** `k8s/deployment.yaml` wires `/health` to both
+`livenessProbe` and `readinessProbe`, so a stale-data 503 would make Kubernetes restart the API pod
+and pull it from the Service — for a condition the API neither causes nor can fix. A dead shipper on
+a laptop would crashloop the production API, an outage caused entirely by the monitoring.
+
+> **Liveness asks "should this process be restarted?" Freshness asks "is the data trustworthy?"**
+> They must never share an endpoint, because one of them has a destructive remediation attached.
