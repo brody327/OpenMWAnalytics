@@ -412,10 +412,25 @@ stat fields may return **userdata with a `__tonumber` metamethod, not a plain Lu
 existing read in that mod wraps them; a new one must too, or the JSON payload will be malformed in
 a way that looks like a missing field.
 
-⚠️ **Base is not in scope at the current emit site.** `evidence_inspect.lua:2286` sees only
-`providedStatValues` / `providedSkillValue` crossing the global boundary. Adding these fields means
-the **player** script sends them alongside modified — `inspect_panel.lua:846-850` and `:1003-1007`,
-plus the global signature at `:2047` and dispatch at `:2547`. No CCFF code reads `.base` today.
+⚠️ **Base is not in scope at the emit site**, so it has to cross the player→global boundary.
+Implemented 2026-07-27 as **one map of records**, `statDetail = { [stat] = { base, modifier,
+damage } }`, sent from both click payloads (`inspect_panel.lua` multi-stat and single-stat) and
+threaded through `handleAction`'s signature and its dispatch.
+
+**Why one grouped map and not three parallel ones** (`statBase` / `statModifier` / `statDamage`):
+the three numbers are only meaningful together, and parallel maps would have to be kept in sync by
+convention at every call site — a fourth field later means a fourth map rather than a key. The
+learner's framing: *consistency with the existing `statValues` shape is worth something, but not
+when the data's own structure argues otherwise.* `statValues` is left untouched, so nothing
+existing can break.
+
+⚠️ **Telemetry-only, and gameplay must never read it.** `handleAction` takes
+`providedStatDetail` purely to emit; a missing or empty table therefore cannot change what the
+player experiences.
+
+⚠️ **Each field is written only if present — never defaulted to 0.** A `stat_modifier` of 0 is a
+*claim* ("unboosted"), and defaulting would make it indistinguishable from "the player script
+didn't send it." Absent means unknown.
 
 ⚠️ **A rejected design, recorded because it looks correct.** The obvious cheaper route is to skip
 both fields and reconstruct causality from event order: *"they consumed a +20 potion, then passed a
