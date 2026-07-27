@@ -1414,3 +1414,58 @@ inside `if`.
 
 Comment density in the new dashboard files is deliberately high **for this reason** — they are
 teaching artifacts, not just code. If an annotation explains the wrong thing, that is signal.
+
+---
+
+## 2026-07-26 (round 3) — spaced check on the six unassessed 4b concepts
+
+Run at the end of the session, after prod was deployed and populated, specifically so the build
+would not bury them. Four questions covering concepts taught on 07-25 and 07-26 but never checked.
+
+| Q | concept | assessment | result |
+| --- | --- | --- | --- |
+| 1 | **Matryoshka truncation** | mechanism → **explain-back** | ❌ → ✅ **repaired in session** |
+| 2 | cardinality forces the child table (**3rd attempt**) | transfer, non-game domain | ✅ **landed** |
+| 3 | **asymmetric `tsvector` config** | prediction | ❌ **missed the failure entirely** |
+| 4 | RRF: consensus, and `k` ↔ `m` | judgment | ⚠️ **half** — mechanism yes, knob no |
+
+**Q1 — the break point was further back than the concept.** The learner said plainly *"I don't
+understand what the dims are."* Matryoshka was unteachable on top of that, because "dimension" had
+never been connected to "one number in the array." Re-taught from there (dims = array length;
+truncation = keep the first N), then the ordered-by-importance analogy (a description ordered
+*tall · dark hair · glasses …* survives being cut; a randomly ordered one does not). **They then
+explained it back unprompted and correctly** — ordering by importance, index 0 most significant,
+cutting the tail costs refinement not substance. Counting this as landed on the strength of the
+explain-back, not the first answer.
+
+⚠️ **They also pushed back on the *name*, correctly**: "matryoshka" made them expect nested
+arrays. Clarified that the nesting is conceptual, not structural — the point of the doll metaphor
+is that **each inner doll is a whole doll**, which is exactly the claim (the first 384 numbers are
+an embedding, not a fragment). Good instinct; the metaphor was underspecified when I first used it.
+
+**Q2 — the correction finally stuck.** Twice on 07-25/26 they substituted "we know the shape, so
+model it" (an argument for why relational is *safe*) for the structural blocker. This time, on a
+`users`/emails question with no game context, they went straight to the N+1 problem. Answered in
+Morrowind vocabulary ("skills", "potion") despite the domain switch — the reasoning transferred
+even though the words didn't, which is the part that counts.
+
+**Q3 — the real miss, and it is the day's own theme.** Asked what happens when the index uses
+`english` and the query uses `simple`, they described the token-count difference (true, measured
+07-25) — an *efficiency* answer to a *correctness* question. The actual behaviour: the document
+stored `guard`, the query asks for `guards`, **zero rows, and the error log says nothing.** Both
+configs are valid; the query succeeds and matches nothing. Re-taught as: *stemming does not need
+to be correct, it needs to be SYMMETRIC.*
+
+**Q4 — had the mechanism, not the dial.** Correctly called the behaviour intentional and
+reconstructed reciprocal rank as scale-free normalization. Could not say what "the opposite
+behaviour" would require. Taught: **lower `k`** steepens `1/(k+rank)` at the top so one confident
+retriever can win alone; high `k` flattens it so appearing in *both* lists dominates. Tied back to
+concept 11 — `k` and `m` are the same shape of dial: trust this evidence vs. demand corroboration.
+
+▶ **Still unassessed: 6 (JSONB range-predicate false-match), 7 (local-first ingest — partially
+covered), 10 (why multiply turns OR into AND).** Plus everything new from step 7: recall via exact
+KNN, out-of-distribution queries, buffers-vs-wall-clock, TOAST and detoasting.
+
+▶ **Re-test candidates, in priority order:** Q3's silent-asymmetry failure (missed outright, and it
+is the pattern the whole day produced), then Matryoshka in a *different form* — I have now
+explained it twice, so a third explanation is not the answer; a hands-on comparison is.
