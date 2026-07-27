@@ -377,3 +377,29 @@ queries them, so a reindex is now a deliberate operation with a visible impact.
 `"mode": "lexical"` — degraded, not broken (`05`). Adding it means extending the existing k8s
 Secret; it is the first **runtime** external credential the API has needed, as distinct from the
 ingest token it merely verifies.
+
+---
+
+## ⚠️ Search is NOT live in prod yet (found 2026-07-27)
+
+`GET /search` merged to `main` on 2026-07-26 and the corpus is populated in prod RDS, but the
+endpoint is **not reachable** on `api.omwanalytics.com` — a live request returns
+`Cannot GET /search`. Two independent causes, both worth recording because neither is a code bug:
+
+| # | cause | fix |
+| --- | --- | --- |
+| 1 | **The pod still runs the pre-search image.** CI (`build-api.yml`) builds and pushes `ghcr.io/…/omwanalytics-api:latest` on every push to `main` touching `api/**`, but nothing triggers a rollout, and a `:latest` tag does not make a running pod re-pull. | `kubectl rollout restart deployment/omwa-api` (same manual step used on 2026-07-26) |
+| 2 | **`OPENAI_API_KEY` is absent from `k8s/deployment.yaml`.** The API boots fine without it by design (`search.ts` `getProvider()` warns and disables the semantic half), so even after a rollout, prod search would serve `mode: 'lexical'` — half the feature, no error. | add to the `omwa-api-secrets` secret + an `env:` entry |
+
+⭐ **This is the day's own theme in infrastructure form.** Both failures are *silent and plausible*:
+cause 1 gives a 404 on one route while every other endpoint and the health check stay green; cause
+2 gives a search box that returns real, relevant, useful results — just lexical ones. Neither trips
+an alarm. The dashboard surfaces both (an error banner and a "word-match only" badge respectively),
+which is the mitigation, but the underlying lesson is the same as the corpus bugs: **a deploy that
+looks healthy and a deploy that is correct are indistinguishable without an independent check of
+the specific thing you changed.**
+
+⚠️ **Note the asymmetry in how the two halves of the platform deploy.** The dashboard auto-deploys
+from `main` via Vercel's Git integration; the API does **not** auto-rollout. So a push that changes
+both ships the frontend immediately and the backend never — which is precisely the ordering that
+produces a live page calling an endpoint that does not exist yet.

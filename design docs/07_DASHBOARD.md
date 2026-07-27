@@ -465,3 +465,64 @@ synthetic and **all high-`n`, so raw ≈ adjusted there** — the shrinkage *gap
 unit-test fixture, **not visible in this data**; and it was **not visually eyeballed** (no
 browser), verified by SSR HTML only, like §6. **Not yet deployed**, and the number is not
 meaningful until real players exist (`10 §3.3`).
+
+---
+
+## 8. Corpus search view (`/search`, 2026-07-27)
+
+The first user-reachable surface over the pgvector corpus (`11`). Built decision-by-decision with
+the learner making each call; the four decisions are recorded here because each one has a
+defensible alternative that a reviewer would reasonably ask about.
+
+**Files:** `app/lib/search.ts` (typed client, no snapshot fallback) · `app/search/page.tsx`
+(Server Component, `searchParams`) · `app/search/SearchBox.tsx` (`'use client'`) ·
+`app/search/SearchResults.tsx` (async Server Component — the part that suspends).
+
+### The four decisions
+
+| # | decision | rejected alternative | why |
+| --- | --- | --- | --- |
+| 1 | **Submit-only, URL holds `q`** | type-ahead with debounce | **filter vs query** — filtering narrows a set the client already holds; querying crosses the network to an OpenAI call + HNSW scan. A debounce long enough to protect that backend has already destroyed the type-ahead feel it exists to provide. |
+| 2 | **`router.push` from a Client Component** | `<form method="get">` (zero JS) | a full document load is **additive** with the ~2.6 s embedding round-trip, not an alternative to it; and it forfeits the Suspense pending state. |
+| 3 | **Scoped `<Suspense key={q}>` + `useTransition`** | `loading.tsx`; or keeping stale results visible | an *explicit* submit means the user is done with the old set, and post-submit stale results are **indistinguishable from a finished search** → reads as silent failure, invites re-submission. `loading.tsx` would also unmount the box that owns `isPending`. |
+| 4 | **Accept the cold-query latency** | stream lexical first, then hybrid | staged streaming reorders results while the user is reading them — a worse version of the same problem decision 3 rejects. |
+
+⚠️ **`key={q}` is load-bearing.** Without it, `?q=a` → `?q=b` leaves React updating the same
+component in place, so the fallback never re-shows and the page sits on stale results.
+
+### Measured (local, 2026-07-27)
+
+| path | latency |
+| --- | --- |
+| novel query (cold) | **~2,640 ms** — OpenAI embedding dominates |
+| repeat query | **9 ms** (`search.ts` query-vector cache, 500 entries) |
+| Postgres half alone | **~3 ms** |
+
+>99% of a first-time search is the embedding round-trip; Postgres does ~3 ms of real work. The
+documented estimate in `11` was ~1,100 ms — one cold sample measured 2,638 ms, which includes TLS
+setup and lazy provider construction. Flagged, not yet a corrected figure.
+
+### Degradation, made visible rather than silent
+
+`mode: 'lexical'` (embedding unavailable) renders an explicit **"word-match only — meaning search
+unavailable"** badge. Results are still useful, but a user who cannot tell the semantic half is
+missing cannot interpret what they are seeing. Upstream errors render an explicit banner — there
+is deliberately **no snapshot fallback**, because a stale search result is not slightly-old data,
+it is *an answer to a different question*.
+
+`lexical_rank` / `vector_rank` are surfaced per hit as badges. This is RRF's payoff over a
+weighted sum: `text #1 · meaning #62` is renderable, `0.0325` is not. Verified live — `Company
+Guard` returns for *guards demanding bribes* with `lexical_rank: null, vector_rank: 1`, i.e. found
+**only** by meaning.
+
+✅ **Duplicate-text handling was already solved server-side**, not in the UI as the step-8 note
+assumed: `search.ts` partitions by `text_hash` (`rn_text = 1`) alongside the parent rollup on
+`record_id`. Verified — 185 chunks carry the literal text `Chest`; a search for `chest` returns one.
+
+### Verified / not verified
+
+✅ `tsc --noEmit`, `next build`, eslint, 52/52 API tests, SSR against the live local API.
+✅ Interactive behaviour (pending state, skeleton re-suspend, Back restoring input text) confirmed
+by the learner in a browser.
+⚠️ **Prod:** see `09` — the live API pod predates `GET /search` and the deployment carries no
+`OPENAI_API_KEY`.

@@ -1472,6 +1472,95 @@ explained it twice, so a third explanation is not the answer; a hands-on compari
 
 ---
 
+## 2026-07-27 — the planned 6-question opening check (ran as written, no improvisation)
+
+| Q | concept | form | result |
+| --- | --- | --- | --- |
+| 1 | asymmetric `tsvector` config | prediction | ✅ **REPAIRED** (was ❌ 07-26) |
+| 2 | Matryoshka | hands-on | ✅ conclusion right, ⚠️ reason wrong — **and the exercise was mis-designed** |
+| 3 | JSONB range-predicate false match | debug | ⚠️ **half** — right disease, wrong clause semantics |
+| 4 | multiply turns OR into AND | prediction | ✅ + a knob collision corrected |
+| 5 | recall via exact KNN | explain-back | ✅ |
+| 6 | buffers vs wall-clock | judgment | ❌ **inverted** → re-taught → landed on follow-up |
+
+**Q1 — the repair held across a day boundary.** Last time they gave an *efficiency* answer to a
+*correctness* question. This time: index stores `guard`, query asks `guards`, zero rows, **log
+silent**, both configs valid. Minor tightening only — they said `english` "breaks it up," conflating
+stemming (reduce to root) with tokenization (split); both configs tokenize identically.
+
+**Q3 — had the class of bug, not the clause.** Correctly identified that `@>` and the magnitude test
+are unlinked predicates satisfiable by *different* array elements. But read
+`(effects->0->>'magnitude')` as "look through the effects" when `->0` is **array index 0 only**.
+Against the fixture (speechcraft first, magnitude 5) the row is therefore a false **negative**, and
+reordering the same array makes it a false positive — worse than the bug they described, because
+nothing pins array order. Doc 11's example assumes strength sits at index 0; noted.
+
+**Q4 — correct, and it surfaced a genuine collision worth recording.** They fused `k=60` (RRF's rank
+discount) with `ef_search=80` (the HNSW graph-walk width). Both are tuned integers from 07-26 and
+they had merged them into one "k." Separated by failure mode: **bad `k` → wrongly ordered results;
+bad `ef_search` → missing results.** Also: RRF = Reciprocal Rank **Fusion**; "rank" is load-bearing
+(scores are discarded, which is what makes it scale-free).
+
+**Q6 — the real miss, and it is last session's own headline inverted.** Asked which number to report
+when buffers are bit-identical and p50 differs 60%, they chose latency ("latency is what we care
+about"). Re-taught from the premise: identical buffers ⇒ *the same pages, the same work* ⇒ the 60%
+is the machine's mood, not the query's cost. Three properties tabled — deterministic, monotonic,
+portable — and tied to the fact that identical-buffers-across-different-configs is precisely how
+bug #5 (`SET LOCAL` no-op) was caught. Follow-up prediction (buffers 41,509 → 844, wall-clock
+unchanged): ✅ answered correctly, then **over**corrected to "wall-clock never matters." Split it:
+**buffers = comparison instrument, latency = acceptance instrument measured on prod.**
+
+### ⭐ Q2 — the mentor's exercise was wrong, and the data said so
+
+Designed to test Matryoshka by comparing **head-96** vs **tail-96** of the stored 384-dim vectors,
+expecting the head to win. Learner predicted the tail would do just as well. **They were right.**
+
+| slice (96 dims each) | mean overlap@10 vs full-384, 100 queries |
+| --- | --- |
+| head, dims 1–96 | **6.07** |
+| middle, dims 145–240 | **6.40** |
+| tail, dims 289–384 | **6.35** |
+
+Controls run **before** interpreting anything (the day's own discipline): `subvector(1,384)` vs full
+= **10.00** exactly (instrument sound), first-8-dims = **2.30** (instrument *can* detect
+degradation). So the tie is real, not a dead measurement.
+
+**The conflation:** MRL's actual promise is that a **prefix is itself a usable embedding**, with the
+loss applied at nested prefix *lengths* (64/128/256/512…). It does **not** promise that dim 5 beats
+dim 300 inside an already-truncated prefix. I tested the second and called it the first.
+
+Prefix-length sweep (the test I should have written), 60 queries:
+
+| prefix | overlap@10 |
+| --- | --- |
+| 384 (stored) | 10.00 |
+| **192** | **7.62** — half the bytes, 76% of the ranking |
+| 96 | 6.27 |
+| 48 | 4.88 |
+| 16 | 2.73 |
+
+Graceful degradation, no cliff — which justifies the 384 decision. **But it does not demonstrate
+Matryoshka**, and that is the lesson that actually landed: head-96 ≈ tail-96 means *two hypotheses
+predict this curve equally well* — "MRL front-loads information" and "any N dims carry N/384 of the
+information." Nothing here separates them. Separating them needs a prefix beating a non-prefix **at
+equal width**, and every width buildable from stored data fails to show that.
+
+⚠️ **Therefore: the dims sweep is blocked for a structural reason, not a scheduling one.** It needs
+the 1536-dim source, which `ingest.ts` discards at write time. Record it that way.
+
+⭐ **Generalized for the learner:** *an experiment only supports a claim if some outcome would have
+refuted it.* Same family as 07-26's bug #4 (a test that could not fail) — and this time the person
+who wrote the experiment was the one who got it wrong.
+
+**Pipeline verified clean during the investigation:** `embeddings.ts:139` requests the native 1536
+and `truncateAndNormalize` takes `slice(0,384)` + re-normalizes, exactly as doc 11 states.
+
+▶ **Still unassessed:** concepts 6, 7, 10 from the 07-25 list; TOAST/detoasting; out-of-distribution
+query construction (mentioned but not tested — they did not raise it unprompted on Q5).
+▶ **Re-test next:** Q3's `->0` element semantics, and Q6's buffers/latency split in a *new* form.
+
+---
+
 ## ▶ PLAN FOR NEXT SESSION (written 2026-07-26 at session close)
 
 ### 1. Opening retrieval check — ~6 questions, and the list is fixed, not improvised
