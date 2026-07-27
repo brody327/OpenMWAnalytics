@@ -247,3 +247,48 @@ liveness route stays green so Kubernetes does not restart a pod over a laptop's 
 ▶ **STILL REQUIRED — the endpoint is not the monitoring.** Something must *poll* `/ops/freshness`
 and reach a human who is not looking. Until an external uptime monitor is pointed at it, this
 detects the outage and tells nobody, which is the same outcome as 07-20.
+
+### ⚠️ Two bugs found while deploying the freshness work (both silent)
+
+**1. The install-id recovery window was 26× too small — and failed without erroring.**
+
+`install_id` reaches the shipper only through event envelopes, so a restart during a quiet period
+leaves it unable to identify itself until the player next plays — silent in exactly the window an
+outage hides in. The fix reads backwards from the end of the log. The first version read a fixed
+**64 KB tail**, which seemed generous.
+
+Measured against the real log:
+
+| tail scanned | `OMWA1` lines found |
+| --- | --- |
+| 64 KB | **0** |
+| 512 KB | **0** |
+| 4 MB | 12 ✅ |
+
+**Telemetry lines are RARE in `openmw.log`** — a 1.7 MB log held twelve of them, and the engine's
+own chatter (`LuaText` warnings and friends) buried them far from the end. The function parsed
+cleanly, threw nothing, returned `null`, and the heartbeat simply never fired. It was caught only
+by probing the assumption directly, because the observable symptom — `shippers: []` — is identical
+to "the shipper hasn't started yet."
+
+Now scans backwards in **1 MB chunks until it finds one**, bounded at 64 MB. A chunk's first line
+is usually cut mid-line; it fails to parse and is skipped, so no carry buffer is needed.
+
+**2. `Stop-ScheduledTask` orphans the `node` child → TWO shippers.**
+
+Observed live: after `Stop-ScheduledTask` + `Start-ScheduledTask`, PIDs 25856 *and* 48288 were both
+tailing the log. The task action is `powershell.exe → start-shipper.ps1 → node ship.mjs`; stopping
+the task kills the wrapper but leaves the grandchild running. The task then reports itself
+**not running**, so the next trigger starts a second one.
+
+⚠️ **`MultipleInstances = IgnoreNew` does not protect against this** — it prevents the *task* from
+running twice and knows nothing about an orphaned grandchild. Two shippers share one
+`.ship-state.json` and race on the offset. Ingest is idempotent on `(session_id, seq)` so no data
+is corrupted, but it is wasted work and a confusing state to debug.
+
+**Operational rule: stop the shipper by killing the `node` process, not by stopping the task.**
+Killing `node` ends the wrapper too, the task registers as finished, and the 15-minute trigger
+restores it cleanly — which is exactly the path verified in the self-heal test above.
+
+✅ **End-to-end verified in prod 2026-07-27:** single shipper, `/ops/freshness` → `200 ok:true`,
+install registered at age 0m.

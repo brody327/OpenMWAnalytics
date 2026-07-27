@@ -217,9 +217,55 @@ const HEARTBEAT_URL = (() => {
   try { return new URL('/ops/heartbeat', API).toString(); } catch { return null; }
 })();
 
+// Recover install_id from the tail of the log when the checkpoint has none.
+//
+// ⚠️ WITHOUT THIS THE HEARTBEAT HAS A HOLE EXACTLY WHERE IT MATTERS. install_id only reaches
+// the shipper through event envelopes, so a restart during a QUIET period would leave it unable
+// to identify itself until the player next generated an event -- i.e. silent for precisely the
+// window an outage hides in, which is the entire failure this feature exists to catch. Reading
+// backwards from the end of the log costs one 64 KB read at startup.
+// ⚠️ MEASURED, NOT ASSUMED: telemetry lines are RARE in openmw.log. A real 1.7 MB log held 12
+// OMWA1 lines, and the last 512 KB contained ZERO -- the engine's own chatter (LuaText warnings
+// and friends) buries them. A fixed tail window is therefore the wrong shape: the first version
+// of this read 64 KB, found nothing, returned null without erroring, and the heartbeat silently
+// never fired. Scan backwards in chunks until a line is actually found.
+function learnInstallIdFromLog() {
+  const CHUNK = 1024 * 1024;
+  const MAX_SCAN = 64 * 1024 * 1024;   // bound the work on a pathological log
+  try {
+    const size = fs.statSync(LOG).size;
+    const fd = fs.openSync(LOG, 'r');
+    try {
+      let end = size;
+      let scanned = 0;
+      while (end > 0 && scanned < MAX_SCAN) {
+        const len = Math.min(CHUNK, end);
+        const buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, end - len);
+        const lines = buf.toString('utf8').split(/\r?\n/);
+        // Scan this chunk newest-first: the most recent envelope is the current identity.
+        // The chunk's own first line is usually cut mid-line; it simply fails to parse and is
+        // skipped, which is why no cross-chunk carry buffer is needed.
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const j = lines[i].indexOf(SENTINEL);
+          if (j === -1) continue;
+          try {
+            const ev = JSON.parse(lines[i].slice(j + SENTINEL.length));
+            if (typeof ev.install_id === 'string' && ev.install_id) return ev.install_id;
+          } catch { /* truncated at a chunk boundary -- keep scanning */ }
+        }
+        end -= len;
+        scanned += len;
+      }
+    } finally { fs.closeSync(fd); }
+  } catch { /* no log yet */ }
+  return null;
+}
+
 async function heartbeat() {
-  // Nothing has ever been seen on this install, so there is no identity to report. Staying
-  // silent is honest here: a shipper that has never parsed an event has nothing to claim.
+  if (!installId) installId = learnInstallIdFromLog();
+  // Genuinely nothing has ever been seen on this install, so there is no identity to report.
+  // Staying silent is honest: a shipper that has never seen an event has nothing to claim.
   if (!installId || !HEARTBEAT_URL) return;
   try {
     const res = await fetch(HEARTBEAT_URL, {
