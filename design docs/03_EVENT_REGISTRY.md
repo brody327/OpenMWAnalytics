@@ -377,7 +377,8 @@ stat is read, so no check was ever *resolved*. Correct per this event's grain.
 | `require` | string | `any` (OR) \| `all` (AND) — **omitted on single-stat checks** |
 | `skill_route` | string | CCFF's archetype counter key, when set |
 | `base_value` | int | **additive 2026-07-27** — the player's *unmodified* stat. See below |
-| `boost_magnitude` | int | **additive 2026-07-27** — fortify magnitude active on the deciding stat at resolve time, read directly from `activeEffects`. `0` when unboosted |
+| `stat_modifier` | int | **additive 2026-07-27** — net modifier on the deciding stat (`+` fortify, `−` drain) |
+| `stat_damage` | int | **additive 2026-07-27** — damage on the deciding stat |
 
 ### `base_value` / `boost_magnitude` — why both, and why neither is inferred (2026-07-27)
 
@@ -393,9 +394,28 @@ bakes a judgment in at write time. Emit the raw unmodified stat and derive every
 | `base_value < threshold AND skill_value >= threshold` | ⭐ **the boost is the ONLY reason this passed** |
 | `base_value >= threshold` | they'd have passed anyway; the potion was wasted |
 
-**`boost_magnitude` is read, not reconstructed** — `Actor.activeEffects(p):getEffect(
-core.magic.EFFECT_TYPE.FortifyAttribute, '<stat>')` returns the magnitude active *at the instant
-the check resolves* (verified in the 0.51 offline docs).
+**The boost is read, not reconstructed — and the mechanism changed once it was verified.** The
+first design (2026-07-27, morning) used
+`Actor.activeEffects(p):getEffect(core.magic.EFFECT_TYPE.FortifyAttribute, '<stat>')`. **Superseded
+the same day:** the 0.51 docs show `SkillStat` and `AttributeStat` each expose **four** fields —
+`base`, `modified`, `modifier`, `damage` (`Package openmw.types.txt:1789`, `:425`). So
+`.modifier` **is** the net boost, directly:
+
+| vs. `activeEffects` | why the stat fields win |
+| --- | --- |
+| covers **every** source | fortify from a potion, spell, birthsign or enchantment all land in `.modifier`; querying one `EFFECT_TYPE` would miss the others |
+| distinguishes fortify from **drain** | `.modifier` is signed and `.damage` is separate — a drained stat is a *different* story from an unboosted one, and one effect-type query cannot see it |
+| one read, no enumeration | no guessing which `EFFECT_TYPE` constant applies to a skill vs an attribute |
+
+⚠️ **Coerce with `tonumber()`.** CCFF's own code warns (`evidence_inspect.lua:1853-1855`) that these
+stat fields may return **userdata with a `__tonumber` metamethod, not a plain Lua number**. Every
+existing read in that mod wraps them; a new one must too, or the JSON payload will be malformed in
+a way that looks like a missing field.
+
+⚠️ **Base is not in scope at the current emit site.** `evidence_inspect.lua:2286` sees only
+`providedStatValues` / `providedSkillValue` crossing the global boundary. Adding these fields means
+the **player** script sends them alongside modified — `inspect_panel.lua:846-850` and `:1003-1007`,
+plus the global signature at `:2047` and dispatch at `:2547`. No CCFF code reads `.base` today.
 
 ⚠️ **A rejected design, recorded because it looks correct.** The obvious cheaper route is to skip
 both fields and reconstruct causality from event order: *"they consumed a +20 potion, then passed a
@@ -418,9 +438,34 @@ check they previously couldn't."* It fails silently in at least four ways —
 ## `SkillCheckDisplayed`
 
 **Status:** 🔵 **designed 2026-07-27, NOT implemented.** Third-party (CCFF).
-⚠️ **One feasibility gate is unresolved:** whether `evidence_inspect.lua` knows, at panel-open
-time, which checks exist *and* whether each threshold is met. If it only knows the former, the
-bottom row of `10 §3.2a`'s 2×2 is not buildable and **must not be inferred**.
+✅ **FEASIBILITY GATE CLOSED 2026-07-27 — the full 2×2 IS buildable, from the PLAYER context only.**
+
+⭐ **The deciding finding: the panel renderer already computes threshold-met at display time**, for
+both skills and attributes, because that is what colours each row gold vs dim
+(`inspect_panel.lua:811-827` reads the stats, `:909-915` and `:1022` compare them). The player is
+*literally shown* whether they can pass. Nothing new has to be computed — it has to be recorded.
+
+⚠️ **Emit from the player, never from `evidence_inspect.lua`.** The global script has **no
+attribute access at all** and its own comment (`:2042-2044`) declares player stats unreliable
+there; stat values are pushed in from the player at click time. A global emit yields only the top
+row of the 2×2.
+
+**Lowest-friction site:** `evidence_player.lua:1958-1960` (the `CCFF_ShowInspectPanel` handler) —
+it already has the guarded `omwaTrack` require and `self` in scope. ⚠️ It does **not** see the
+Back-refresh path, handled separately at `evidence_player.lua:2234`.
+
+### ⚠️ Three false-display filters, or the denominator inflates without bound
+
+`showInspectPanel` is not only called for real opens:
+
+| case | signal | why it must be excluded |
+| --- | --- | --- |
+| **hover repaint** | `isRebuild = true`, **debounced 0.05 s** (`inspect_panel.lua:1235-1240`) | ~20 events/second of hovering. This alone would make Q2.5 meaningless |
+| Back-button refresh | also `isRebuild = true` (`:1193`) | checks genuinely reappear; counting it double-counts one decision |
+| dial-check **result** panel | `isRebuild = nil` but `data.result_header ~= nil` (`:268`) | `dial_check` rebuilds the full action list (`evidence_inspect.lua:2364-2365`), so remaining checks look freshly displayed |
+
+The first is the dangerous one: it produces an enormous, plausible, entirely wrong number, with no
+error and no missing rows — the failure mode this registry keeps recording.
 
 **Questions it answers:** `10` **Q2.5** (is the bespoke failure prose ever read → where to spend
 authoring bandwidth) and **Q3.2a**'s exposure denominator. Q2.5 is the inventory's only question
