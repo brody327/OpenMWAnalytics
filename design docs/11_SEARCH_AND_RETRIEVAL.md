@@ -664,8 +664,63 @@ path, where 30 detoasts are free. It would speed up nothing a user touches. Reco
 
 - **The dims sweep** (`384 / 512 / 768 / 1536`). ⚠️ Doc §5 claimed one embedding run would cover it,
   but **ingest stores only the truncated 384** — the 1536-dim source is discarded. A sweep needs a
-  bench table holding full-width vectors and a re-embed (~$0.026).
+  bench table holding full-width vectors and a re-embed (~$0.026). **§10b below shows this is a
+  structural block, not a scheduling one.**
 - **`m` / `ef_construction`** — build-time parameters, so each value needs a full index rebuild.
+
+---
+
+## 10b. ⚠️ What the stored vectors CANNOT prove about Matryoshka (measured 2026-07-27)
+
+Run as a hands-on re-teach of §5's truncation argument, and it corrected the argument instead.
+
+**The hypothesis tested:** if information is "front-loaded," the *first* quarter of a stored vector
+should out-rank the *last* quarter. Ground truth = exact-KNN top-10 over the full 384; the metric is
+mean overlap@10 across randomly sampled queries, forced to a seq scan.
+
+| slice (96 dims each) | mean overlap@10 vs full-384 |
+| --- | --- |
+| head, dims 1–96 | **6.07** |
+| middle, dims 145–240 | **6.40** |
+| tail, dims 289–384 | **6.35** |
+
+**Controls ran before the result was interpreted** — the discipline of §10a's two fake tables:
+
+| control | expected | measured |
+| --- | --- | --- |
+| `subvector(1,384)` vs full — identity | exactly 10.00 | **10.00** — the instrument is sound |
+| first **8** dims only | badly degraded | **2.30** — the instrument *can* detect degradation |
+
+So the tie is real. **Within the stored 384, position carries no importance gradient.**
+
+Prefix-length sweep (the test that *should* have been written), 60 queries:
+
+| prefix | overlap@10 |
+| --- | --- |
+| 384 (stored) | 10.00 |
+| **192** | **7.62** — half the bytes, 76% of the ranking |
+| 96 | 6.27 |
+| 48 | 4.88 |
+| 16 | 2.73 |
+
+Graceful degradation, no cliff — which **justifies the 384 decision in §5**. But it does *not*
+demonstrate Matryoshka, and conflating the two is the error worth recording:
+
+| claim | MRL's actual promise? | this data |
+| --- | --- | --- |
+| a **prefix** is itself a usable embedding | **yes** — the loss is applied at nested prefix *lengths* (64/128/256/512…) | consistent, but not isolated |
+| earlier dimensions individually beat later ones | **no** — never promised at sub-prefix granularity | **falsified** (head ≈ mid ≈ tail) |
+
+⭐ **The methodological point: two hypotheses predict the prefix curve equally well** — "MRL
+front-loads information" and "any N dims carry N/384 of the information." Nothing measurable from
+stored data separates them; that needs a prefix beating a **non-prefix at equal width**, and every
+width buildable here fails to show it. *An experiment only supports a claim if some outcome would
+have refuted it* — the same family as §10a's benchmark-against-itself, except here the flaw was in
+the experiment's design rather than its wiring.
+
+✅ **Pipeline verified correct while investigating:** `embeddings.ts` requests the **native 1536**
+(`NATIVE_DIMS`) and `truncateAndNormalize` takes `slice(0, 384)` + re-normalizes, exactly as §5 and
+§7 describe. The finding is about the *concept*, not a defect.
 
 ---
 
@@ -703,11 +758,17 @@ block of HTML-ish markup, and the corpus genuinely contains script comments like
   fired live**: every fake vector was invalidated by construction (`chunks skipped 0`).
 - ✅ **Step 7 — `ef_search` curve MEASURED**, see §10a. ▶ Remaining: the dims sweep (needs a bench
   table + re-embed, because ingest discards the 1536-dim source) and `m` / `ef_construction`.
-- **Step 8 — dashboard view + synthetic seeding** (see [[project-synthetic-data-policy]]:
-  `env='synthetic'`, banner, never a truncate). ⚠️ First finding from the live demo: results can
-  contain **duplicate text under different records** (the same stock line under two topics), so the
-  UI needs to dedupe or group.
-- **Apply `hnsw.ef_search = 80`** at the search endpoint (§10a) — a GUC, not a migration.
+- ✅ **Step 8 — dashboard view DONE 2026-07-27, LIVE at `omwanalytics.com/search`.** Four UI
+  decisions with their rejected alternatives are recorded in `07 §8`; the prod deploy failures that
+  stood between the merge and a reachable endpoint are in `09`.
+  ⚠️ **The dedupe note above was WRONG** — duplicate text was never a UI problem. It is already
+  handled server-side in `search.ts` by `ROW_NUMBER() OVER (PARTITION BY c.text_hash)` with
+  `rn_text = 1`, alongside the parent rollup on `record_id`. Verified: 185 chunks carry the literal
+  text `Chest`; a search for `chest` returns exactly one.
+  ▶ **Synthetic seeding is NOT done** and was not needed for this view — the corpus is real data,
+  so the search page has nothing to seed. It remains open for the *telemetry* views.
+- ✅ **`hnsw.ef_search = 80` APPLIED** at the search endpoint (`search.ts`, `EF_SEARCH`), inside an
+  explicit transaction because `SET LOCAL` outside one is a silent no-op (§10a).
 - ✅ **DEPLOYED AND POPULATED 2026-07-26.** Migration `0005` applied via the `09 §7` initContainer
   on a `kubectl rollout restart` (pgvector 0.8.2 installed, three tables created, 6 migrations
   recorded). Prod now holds **34,785 records / 36,567 chunks / 2,960 effects**, one embedding model,

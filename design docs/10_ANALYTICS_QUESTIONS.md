@@ -349,3 +349,26 @@ The inventory reordered it, which is the point of writing one.
    not a metric.
 5. Modules are containers, not a taxonomy to defend. Add a fifth when a real question
    won't fit — don't force it.
+
+---
+
+## 7. What this doc does NOT govern — the scope boundary (recorded 2026-07-27)
+
+`/search` (doc `11`, dashboard `07 §8`) shipped without a row here, and that is **correct**, not
+an oversight. Recording it so a future session does not try to retrofit one.
+
+This inventory governs **questions about player behaviour**, answered from telemetry. Every rule in
+§6 assumes that shape: a question names a decision, an event cites a question, a metric ships with
+a denominator and an `n`.
+
+Corpus search is a different kind of surface. It reads the **game's own content** — dialogue,
+quests, items, spells, cells — which is fixed data shipped with the game, not something players
+generate. There is no denominator, no sample size, and no event to justify, because nothing is
+being measured. It is a **lookup tool** for the mod developer, not an analytics answer.
+
+⚠️ **The distinction matters at the join.** `11 §3` grades `AreaEntered.area` → `game_records`
+(named `CELL`s) as the platform's one exact join. When that join is used to rank content *by what
+players actually engage with*, the result **is** an analytics question and **does** belong here,
+with a denominator like any other. Searching the corpus is not; ranking it by telemetry is.
+
+Rule 6 for §6: **a surface earns a row here when it measures players.** Reading game data does not.

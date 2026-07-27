@@ -1561,7 +1561,7 @@ query construction (mentioned but not tested — they did not raise it unprompte
 
 ---
 
-## ▶ PLAN FOR NEXT SESSION (written 2026-07-26 at session close)
+## ✅ EXECUTED 2026-07-27 — PLAN FROM 2026-07-26 (kept for the record; superseded by the 4c plan at the end)
 
 ### 1. Opening retrieval check — ~6 questions, and the list is fixed, not improvised
 
@@ -1613,3 +1613,111 @@ not restart it.
 
 Concepts 6, 7, 10 from the 07-25 list, plus all of step 7's material except what question 5 and 6
 above cover. Do not let the dashboard bury them.
+
+---
+
+## 2026-07-27 (part 2) — step 8 built in step-by-step React mode (learner drove every decision)
+
+Requested at the 07-26 close: *"go slowly through the actual react coding/decision making."* Run as
+**four decisions, learner makes the call, I only frame the tradeoff.** Per
+`feedback-react-step-by-step`, the target was where React **differs from Angular**, not React
+fundamentals (done 07-23).
+
+| # | decision | learner's call | quality of the reasoning |
+| --- | --- | --- | --- |
+| 1 | type-ahead vs submit-only | **submit-only, URL holds `q`** | ⭐ **better than the conclusion** |
+| 2 | `<form method="get">` vs `router.push` | **client component** | ⭐ named the right cost model |
+| 3 | where the pending state comes from | **scoped `<Suspense>` + `useTransition`, results clear** | ⭐ strongest of the four |
+| 4 | what to do about 2.6 s cold latency | **accept it** | ✅ consistent with 3 |
+
+⭐ **D1 — they derived the distinction unprompted.** *"We're making the request over a set of data
+that's not currently in the UI."* That is **filter vs query**, arrived at from first principles;
+I supplied only the vocabulary. Then, unprompted: *"if we're debouncing that much, we might as well
+do it on submit"* — the observation that a debounce long enough to protect an expensive backend has
+already destroyed the type-ahead feel it was added to provide. Most engineers never say that out
+loud.
+
+⭐ **D2 — "costs are additive, not alternative."** Rejected the framing in my own question (I asked
+whether the reload's 300 ms was *irrelevant next to* the embedding round-trip) and pointed out it
+**stacks on top**, so feedback matters *more* as the wait grows. They also weighed simplicity
+explicitly before spending it, rather than by default.
+
+⭐ **D3 — the best reasoning of the session, and it beat the answer I was fishing for.** I expected
+"keep stale results visible." They argued the opposite from the *trigger semantics*: a submit is an
+explicit opt-in, so the old set is dead by definition — and post-submit stale results are
+**indistinguishable from a finished search**, so they read as silent failure and invite repeated
+submissions. Generalized with them as: *the cost of stale data scales with how hard it is to tell
+apart from fresh data.* Also insisted the two regions must **agree** (busy button + cleared list),
+which is the failure mode split feedback actually produces.
+
+**Taught in place** (jargon-on-first-use, all React/Next-specific): Server Components have no
+instance so the request *is* their props; `defaultValue` vs `value` and why `value` without
+`onChange` is read-only (the nearest React gets to *not* having `[(ngModel)]`); `startTransition`
+marking an update non-urgent to yield `isPending`; and ⚠️ **`key` on a `<Suspense>` boundary** —
+without `key={q}`, `?q=a → ?q=b` updates in place and the fallback never re-shows. Same `key`
+concept as in `.map()`, doing a job nobody expects it to do.
+
+**Assessment note:** this session was **learner-driven decisions, not quizzing** — four judgment
+calls with real tradeoffs is a stronger signal than four questions, and all four were defended with
+reasoning rather than preference. Logging it as *demonstrated judgment*, not as a quiz score.
+
+### ⭐ The day's theme landed twice more, in infrastructure
+
+The 07-26 plan named *"looks right and is right are indistinguishable without an independent
+check"* as the lesson to teach explicitly. It taught itself instead — two more instances, both
+found while deploying, both with `/health` green (see `09`):
+
+| # | failure | why it was invisible | what caught it |
+| --- | --- | --- | --- |
+| 7 | pod 45 min older than the code | 404 on **one route**; every other endpoint fine | curling the *specific* new route |
+| 8 | `OPENAI_API_KEY` absent ⇒ `mode:'lexical'` | real, relevant, plausible results | **semantic-only hits** (`lexical_rank:null`) — impossible from the lexical half |
+
+⭐ **The transferable move: pick a check that CANNOT pass under the failure you fear.** A
+semantic-only hit cannot be produced without the embedding path, so one such row disproves silent
+degradation. `/health` was green through both and proved nothing.
+
+▶ **Still unassessed:** 07-25 concepts 6, 7, 10; TOAST/detoasting; out-of-distribution query
+construction (they did not raise it unprompted on Q5).
+▶ **Re-test queued:** the `->0` element semantics (Q3), and buffers-vs-latency in a *new* form (Q6).
+
+---
+
+## ▶ PLAN FOR NEXT SESSION (written 2026-07-27) — 4c, the last resume gap
+
+### 1. Opening retrieval check — ~4 questions, list fixed
+
+Smaller than today's because less new ground was broken (four decisions, one experiment). Two are
+carry-over re-tests; **never multiple choice**.
+
+| # | concept | why | form |
+| --- | --- | --- | --- |
+| 1 | JSONB `->0` vs "any element" | ⚠️ half-landed 07-27 — had the disease, not the clause | debug — same fixture, reordered array; ask if it still matches |
+| 2 | buffers vs wall-clock, **new form** | ❌ inverted 07-27, repaired, needs to survive a day | judgment — a *prod* scenario, not a local one |
+| 3 | why head-96 ≈ tail-96 defeats the Matryoshka claim | today's own finding, assessed only once | explain-back |
+| 4 | a check that cannot pass under the failure you fear | the deploy lesson | transfer — *different* system, e.g. "how would you prove a cache is actually being used?" |
+
+### 2. ⚠️ 4c is where the guardrails matter most
+
+`4c — LLM insights over the aggregate layer` closes résumé bullet 5, and the JD's *"define the
+right problems / balance human and technology intelligence"* is **explicit wariness of reaching for
+ML where a heuristic does**. So the teaching frame is not "how to prompt" — it is:
+
+1. **Have the "why not just a heuristic" answer ready before writing a prompt.** 4a already proves
+   we reach for the heuristic first; 4c must justify *why this specific job needs generation*.
+2. **Bounded prompts + human review** (the `project-resume-gap-plan` shape) — not an agent, not a
+   tool-calling loop. Guardrails: no new infra without demonstrated need.
+3. **n=1 is still true.** Insights over an aggregate built from one install are a *demo of the
+   mechanism*, not a finding. Say so in the UI, as `mode:'lexical'` and the synthetic banner do.
+4. ⚠️ **The failure mode is this session's theme again, at its worst:** an LLM produces fluent,
+   plausible, confident output *by construction*. "Looks right vs is right" has no natural tell
+   here, so decide the independent check **before** building — what would falsify a generated
+   insight? That question is the design work.
+
+### 3. Also open (not blocking 4c)
+
+- **`kubectl rollout restart` is manual** — no rollout trigger on a new image (`09`). Small,
+  self-contained, and it removes a footgun that already bit once.
+- Rate limiting (bullet 2) + uptime/error monitoring (bullet 3) — each turns a currently-overstated
+  résumé bullet fully true. Interviewers probe bullets.
+- Synthetic seeding for the **telemetry** views (`project-synthetic-data-policy`) — never needed for
+  search, which runs on real corpus data.
