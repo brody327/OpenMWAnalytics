@@ -90,6 +90,45 @@ export function chunkText(text: string): string[] {
 }
 
 /**
+ * The text we EMBED, which is deliberately not always the text we DISPLAY.
+ *
+ * ⚠️ THE PROBLEM THIS SOLVES, found by actually querying (2026-07-26): asking
+ * *"a potion that makes you more persuasive"* returned Cheap Potion of Paralyze, Invisibility and
+ * Light. An ALCH record has no prose, so its full_text is just its NAME -- the vector encoded
+ * "cheap potion of…" and matched on the word *potion*. What an item actually DOES lives in
+ * record_effects: relational, queryable, and never embedded. The semantic half was searching
+ * labels, not meaning.
+ *
+ * So for effect-bearing records (ALCH / SPEL / ENCH / INGR) we append the effects as readable
+ * text. `full_text` is untouched -- 11 §6 keeps display and retrieval separate, and this is the
+ * retrieval side.
+ *
+ * MAGNITUDES AND DURATIONS ARE DELIBERATELY OMITTED. "20-20" contributes almost nothing to an
+ * embedding and would dilute the words that carry meaning; magnitude is a *relational* filter
+ * (`WHERE affected='personality' AND magnitude_min >= 10`), which is precisely why the effects
+ * live in a child table rather than in the prose.
+ *
+ * ⚠️ This changes chunk text, therefore the text_hash, therefore re-embeds exactly the affected
+ * rows on the next ingest -- the idempotency key doing its job, loudly and by construction.
+ */
+export function searchableText(record: ParsedRecord): string {
+  if (record.effects.length === 0) return record.fullText;
+
+  const seen = new Set<string>();
+  const phrases: string[] = [];
+  for (const e of record.effects) {
+    // "Fortify Attribute personality" -- the effect name plus its target is the whole semantic
+    // payload. Duplicates are common (two effects of the same kind on different targets are
+    // distinct; identical pairs are not) and repeating them only skews the vector.
+    const phrase = e.affected ? `${e.effectName} ${e.affected}` : e.effectName;
+    if (seen.has(phrase)) continue;
+    seen.add(phrase);
+    phrases.push(phrase);
+  }
+  return `${record.fullText}. ${phrases.join('. ')}.`;
+}
+
+/**
  * Records -> chunk rows. `chunk_id` is DERIVED (`${recordId}#${ordinal}`) rather than a sequence,
  * so re-running ingest produces the same ids for the same input and the upsert can be a plain
  * ON CONFLICT -- no lookup table, no coordination, no surrogate keys to keep stable.
@@ -97,9 +136,10 @@ export function chunkText(text: string): string[] {
 export function buildChunks(records: ParsedRecord[]): ChunkRow[] {
   const rows: ChunkRow[] = [];
   for (const record of records) {
+    // Books are the only chunked type and they never carry effects, so the two paths never meet.
     const texts = CHUNKED_TYPES.has(record.type)
       ? chunkText(record.fullText)
-      : [record.fullText];
+      : [searchableText(record)];
 
     texts.forEach((text, ordinal) => {
       if (!text) return;

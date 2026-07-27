@@ -114,3 +114,47 @@ test('truncation re-normalizes: a prefix of a unit vector is NOT a unit vector',
   const norm = Math.sqrt(fixed.reduce((s, x) => s + x * x, 0));
   assert.ok(Math.abs(norm - 1) < 1e-9, `expected unit length after truncation, got ${norm}`);
 });
+
+// --- searchable text: effects are the meaning of an item ---------------------------------------
+
+test('an effect-bearing record embeds WHAT IT DOES, not just its name', () => {
+  const potion = rec({
+    recordId: 'p_charm', type: 'ALCH', name: 'Potion of Charm', fullText: 'Potion of Charm',
+    effects: [
+      { ordinal: 0, effectId: 79, effectName: 'Fortify Attribute', affected: 'personality',
+        affectedKind: 'attribute', magnitudeMin: 10, magnitudeMax: 20, duration: 30, range: 'self' },
+    ],
+  });
+  const [chunk] = buildChunks([potion]);
+  // Without this, the vector encodes "potion of charm" and a query about persuasion matches the
+  // word "potion" — which is exactly what happened on the real corpus.
+  assert.match(chunk.text, /Fortify Attribute personality/);
+  assert.match(chunk.text, /Potion of Charm/);
+  // Magnitudes and durations are deliberately excluded: they dilute the meaningful words and are
+  // a relational filter, not a semantic one.
+  assert.doesNotMatch(chunk.text, /10|20|30/);
+});
+
+test('repeated identical effect phrases are collapsed, distinct targets are not', () => {
+  const eff = (ordinal: number, affected: string | null) => ({
+    ordinal, effectId: 79, effectName: 'Fortify Attribute', affected,
+    affectedKind: 'attribute' as const,
+    magnitudeMin: null, magnitudeMax: null, duration: null, range: null,
+  });
+  const [chunk] = buildChunks([rec({
+    recordId: 'r', type: 'SPEL', name: 'Blessing', fullText: 'Blessing',
+    effects: [eff(0, 'personality'), eff(1, 'personality'), eff(2, 'luck')],
+  })]);
+  assert.equal(chunk.text.match(/Fortify Attribute personality/g)?.length, 1,
+    'a repeated phrase only skews the vector');
+  assert.match(chunk.text, /Fortify Attribute luck/);
+});
+
+test('records without effects are untouched, and books are still chunked from full text', () => {
+  const info = rec({ recordId: 'i', type: 'INFO', fullText: 'Addhiranirr is hiding.' });
+  assert.equal(buildChunks([info])[0].text, 'Addhiranirr is hiding.');
+
+  const long = `${para(400, 'alpha')}\n\n${para(400, 'beta')}`;
+  const book = buildChunks([rec({ recordId: 'b', type: 'BOOK', fullText: long })]);
+  assert.ok(book.length > 1, 'the book path must not be affected');
+});
