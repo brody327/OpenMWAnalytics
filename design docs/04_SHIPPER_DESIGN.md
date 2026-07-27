@@ -197,3 +197,53 @@ a laptop would crashloop the production API, an outage caused entirely by the mo
 
 > **Liveness asks "should this process be restarted?" Freshness asks "is the data trustworthy?"**
 > They must never share an endpoint, because one of them has a destructive remediation attached.
+
+### ✅ Freshness monitoring — BUILT + VERIFIED 2026-07-27
+
+The safety net supervision cannot provide (machine off, network down, API rejecting, shipper
+alive-but-stuck).
+
+| piece | what |
+| --- | --- |
+| `shipper_state` | **one row per install**, UPSERTed. Bounded by installs, never by time |
+| `POST /ops/heartbeat` | authenticated (it writes; an open route would let anyone forge "the pipeline is fine") |
+| `GET /ops/freshness` | **503 when any shipper is stale**, so a dumb external monitor can page a human |
+| `ship.mjs` | pings every 5 min **whether or not there is anything to send** |
+
+⭐ **The heartbeat's entire value is that it fires when idle.** A ping sent only alongside events
+carries zero information — it would be silent in exactly the quiet period an outage hides in.
+
+⭐ **Why not `max(events.received_at)`?** It only advances when someone *plays*, so in any quiet
+period it grows without bound and a healthy pipeline looks broken — the same bug
+`friction_fold_state` exists to avoid one layer down. An alert on it would fire every time the
+author took a day off, get muted, and then miss the real outage. It is **reported for context and
+never alerted on**. *"Is the shipper alive"* and *"is anyone playing"* are different questions;
+only the first is an outage.
+
+⭐ **Why not an event type?** `03` retired the original `Heartbeat` because 1,049 of them against
+11 real events bloated storage *and* corrupted sequence analysis. A single-row-per-install table is
+invisible to every sequence query because it is not in `events` at all.
+
+**Threshold: 120 minutes.** Deliberately generous against a 5-minute ping — it tolerates a slept
+laptop, a flaky network, a reboot. The failure being caught lasted six days; catching it in two
+hours is ~70×, and a tighter bound would only buy false alarms.
+
+**Verification — all eight cases, including the one that matters:**
+
+| # | case | result |
+| --- | --- | --- |
+| 1 | no shippers registered | **503** — an empty table is *not* healthy; greening on no data is monitoring nothing |
+| 2 | `/health` unaffected | 200 |
+| 3 | heartbeat without token | 401 |
+| 4 | malformed `install_id` | 400 |
+| 5 | valid heartbeat | 200 |
+| 6 | freshness after ping | 200, `ok: true` |
+| 7 | ⭐ **`last_seen_at` aged by six days — the real outage replayed** | **503**, `minutes_since: 8640` |
+| 8 | ⭐ **`/health` DURING that outage** | **200** — k8s correctly does nothing |
+
+Cases 7 and 8 are the pair that matters: the freshness route detects the exact incident, and the
+liveness route stays green so Kubernetes does not restart a pod over a laptop's dead process.
+
+▶ **STILL REQUIRED — the endpoint is not the monitoring.** Something must *poll* `/ops/freshness`
+and reach a human who is not looking. Until an external uptime monitor is pointed at it, this
+detects the outage and tells nobody, which is the same outcome as 07-20.

@@ -12,14 +12,29 @@ import { friction } from './stats/friction.js';
 import { skills } from './stats/skills.js';
 import { ranking } from './stats/ranking.js';
 import { search } from './search/search.js';
+import { freshness, heartbeat } from './ops/freshness.js';
 
 const app = express();
 app.use(express.json());
 
-// Liveness check.
+// Liveness check. Wired to k8s livenessProbe AND readinessProbe, so a non-200 here means
+// "restart this pod and take it out of rotation".
+//
+// ⚠️ NOTHING ABOUT DATA MAY EVER BE ADDED HERE. This endpoint answers "is this process
+// healthy", not "is the pipeline healthy" -- see /ops/freshness below, which deliberately
+// does not share this route. Folding staleness in would let a dead shipper on someone's
+// laptop crashloop production.
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
+
+// Pipeline freshness (design docs 04). 503 when a shipper has gone silent, so a dumb external
+// uptime monitor can page a human. NO KUBERNETES PROBE MAY POINT AT THIS.
+app.get('/ops/freshness', freshness);
+
+// Shipper liveness ping. Authenticated like the other write path -- it writes to the database,
+// and an open endpoint would let anyone forge "the pipeline is fine".
+app.post('/ops/heartbeat', requireIngestToken, heartbeat);
 
 // Ingestion. Authenticated: this is the only WRITE path, and deployment put it on the
 // public internet. The read side below stays deliberately open (see events/auth.ts).

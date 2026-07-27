@@ -273,6 +273,38 @@ export const frictionFoldState = pgTable('friction_fold_state', {
   lastSessionsFolded: integer('last_sessions_folded').notNull().default(0),
 });
 
+// Shipper liveness -- ONE ROW PER INSTALL, rewritten on every heartbeat. Never appended.
+//
+// WHY IT EXISTS: on 2026-07-20 the shipper died and telemetry was silently dark for six days
+// (`04`). `/health` was green throughout and was right to be -- the API was fine, the pipeline
+// was not. Nothing in the cloud could tell the difference between a dead shipper and a player
+// who simply was not playing.
+//
+// ⚠️ THAT AMBIGUITY IS THE WHOLE DESIGN PROBLEM, and it is `frictionFoldState`'s lesson one
+// layer up: max(events.received_at) only advances when someone PLAYS, so during any quiet
+// period it grows without bound and a healthy pipeline looks broken. An alert built on it
+// cries wolf every time the author takes a day off, gets muted, and then misses the real
+// outage -- which is worse than no alert, because you believe you are covered.
+//
+// A heartbeat separates the two questions: "is the shipper ALIVE" (this table) from "is anyone
+// PLAYING" (the events table). Only the first is an outage.
+//
+// ⚠️ WHY NOT AN EVENT: `03` retired the original `Heartbeat` type for exactly the reason a
+// reviewer would raise here -- 1,049 heartbeats against 11 real events, which bloated storage
+// AND corrupted sequence analysis (`LEAD()` reported "players respond to failure by idling").
+// Keyed by install_id, this table holds one row per install FOREVER: bounded by how many people
+// run the mod, not by how long they run it. It is also structurally invisible to every sequence
+// query, because it is not in `events` at all. Ops liveness and product telemetry are different
+// concerns and `03`'s complaint was precisely that they had been mixed.
+export const shipperState = pgTable('shipper_state', {
+  installId: uuid('install_id').primaryKey(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  // Lets "alive but stuck" be distinguished from "alive and idle": a shipper whose offset never
+  // advances while it keeps checking in is a different failure from one with nothing to send.
+  lastShippedSeq: integer('last_shipped_seq'),
+  shipperVersion: text('shipper_version'),
+});
+
 // Idempotency guard: which sessions have already been folded into friction_rollup. Without
 // this, a second job run re-adds already-settled sessions and inflates every bucket. This is
 // ON CONFLICT DO NOTHING (ingest) one layer up -- "fold each settled session EXACTLY once".

@@ -38,11 +38,12 @@ const POLL_MS = 1000;
 // --- durable state --------------------------------------------------------
 let offset = 0;
 let fingerprint = null;   // sha1 of the log's first line; identifies the file across launches
+let installId = null;     // learned from the event envelope; needed to identify OUR heartbeat
 
 function saveState() {
   try {
     const tmp = STATE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify({ offset, fingerprint }));
+    fs.writeFileSync(tmp, JSON.stringify({ offset, fingerprint, installId }));
     fs.renameSync(tmp, STATE);   // atomic: never leave a half-written state file
   } catch (e) {
     console.error('[shipper] could not persist state:', e.message);
@@ -52,7 +53,14 @@ function saveState() {
 function loadState() {
   try {
     const s = JSON.parse(fs.readFileSync(STATE, 'utf8'));
-    if (typeof s.offset === 'number') { offset = s.offset; fingerprint = s.fingerprint ?? null; return true; }
+    if (typeof s.offset === 'number') {
+      offset = s.offset;
+      fingerprint = s.fingerprint ?? null;
+      // Persisted so a shipper restarting during a QUIET period can still say "I am alive"
+      // before it has parsed a single new event -- which is exactly the outage window.
+      installId = s.installId ?? null;
+      return true;
+    }
   } catch { /* no/invalid checkpoint */ }
   return false;
 }
@@ -77,7 +85,11 @@ function extract(text) {
     const i = line.indexOf(SENTINEL);
     if (i === -1) continue;
     try {
-      events.push(JSON.parse(line.slice(i + SENTINEL.length)));
+      const ev = JSON.parse(line.slice(i + SENTINEL.length));
+      // Learn our identity from the envelope. The shipper has no id of its own -- the mod
+      // generates install_id and it only ever reaches us through the events themselves.
+      if (typeof ev.install_id === 'string' && ev.install_id) installId = ev.install_id;
+      events.push(ev);
     } catch {
       console.warn('[shipper] bad payload:', line.slice(i + SENTINEL.length));
     }
@@ -186,3 +198,45 @@ if (loadState()) {
 console.log(`[shipper] tailing ${LOG}`);
 console.log(`[shipper] posting to ${API} (env=${ENV})`);
 setInterval(pump, POLL_MS);
+
+// --- liveness heartbeat (design docs 04) ----------------------------------
+//
+// WHY THIS EXISTS: on 2026-07-20 this process died and telemetry was silently dark for SIX
+// DAYS. Nothing in the cloud could tell the difference between "the shipper is dead" and "the
+// player isn't playing" -- because with no events, those look identical.
+//
+// ⚠️ THE POINT IS THAT IT FIRES WITH NOTHING TO SEND. A ping that only went out alongside
+// events would carry exactly zero information: it would be silent in precisely the quiet
+// period an outage hides in. Idle is the case this exists for.
+//
+// It is NOT an event: `03` retired the original `Heartbeat` type because 1,049 of them against
+// 11 real events bloated storage and corrupted sequence analysis. This POSTs to a separate ops
+// route that UPSERTs one row per install -- bounded by installs, never by time.
+const HEARTBEAT_MS = 5 * 60 * 1000;
+const HEARTBEAT_URL = (() => {
+  try { return new URL('/ops/heartbeat', API).toString(); } catch { return null; }
+})();
+
+async function heartbeat() {
+  // Nothing has ever been seen on this install, so there is no identity to report. Staying
+  // silent is honest here: a shipper that has never parsed an event has nothing to claim.
+  if (!installId || !HEARTBEAT_URL) return;
+  try {
+    const res = await fetch(HEARTBEAT_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(TOKEN && { Authorization: `Bearer ${TOKEN}` }),
+      },
+      body: JSON.stringify({ install_id: installId, last_shipped_seq: null }),
+    });
+    if (!res.ok) console.error(`[shipper] heartbeat ${res.status}`);
+  } catch (e) {
+    // Never fatal and never retried: the next tick is the retry, and a shipper that died
+    // trying to report that it was alive would be its own punchline.
+    console.error('[shipper] heartbeat failed:', e.message);
+  }
+}
+
+heartbeat();
+setInterval(heartbeat, HEARTBEAT_MS);
