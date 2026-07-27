@@ -36,11 +36,28 @@ const rec = (over: Partial<ParsedRecord> & { recordId: string }): ParsedRecord =
 const LONG_BOOK = Array.from({ length: 6 }, (_, i) =>
   Array.from({ length: 120 }, () => `para${i}`).join(' ')).join('\n\n');
 
+// ⚠️ EVERY recordId HERE IS DELIBERATELY FAKE (`fixture_*`), AND THAT IS A CORRECTNESS
+// REQUIREMENT, NOT A NAMING PREFERENCE.
+//
+// This fixture originally used REAL ids -- `potion_skooma_01`, `BookSkill_Enchant1`, taken from
+// Morrowind.esm for realism. `record_id` is the primary key, so every `npm test` UPSERTED the
+// fixture over the genuine records: Skooma's four real effects were replaced by the two modelled
+// here, and its `source` flipped to `test.fixture`.
+//
+// It survived undetected for a day because the row still existed, still looked plausible, and
+// nothing compared the database to the .esm. It was finally caught by CONTRADICTION: a player
+// drank Skooma in-game, gained Strength, and the corpus insisted Skooma does not affect Strength
+// (2026-07-27). `npm run verify-corpus` now reconciles the two and would have caught it in
+// seconds.
+//
+// Scoping by `source` (below) stopped the tests DELETING real data. It could never stop them
+// OVERWRITING it, because a shared primary key does not care about the source column. Fake ids
+// are what actually close that hole.
 const CORPUS: ParsedRecord[] = [
-  rec({ recordId: 'info_1', fullText: 'Addhiranirr is hiding in the underworks.' }),
-  rec({ recordId: 'info_2', fullText: 'Addhiranirr is hiding in the underworks.' }), // duplicate text
+  rec({ recordId: 'fixture_info_1', fullText: 'Addhiranirr is hiding in the underworks.' }),
+  rec({ recordId: 'fixture_info_2', fullText: 'Addhiranirr is hiding in the underworks.' }), // duplicate text
   rec({
-    recordId: 'potion_skooma_01', type: 'ALCH', name: 'Skooma', fullText: 'Skooma',
+    recordId: 'fixture_potion_01', type: 'ALCH', name: 'Skooma', fullText: 'Skooma',
     effects: [
       { ordinal: 0, effectId: 79, effectName: 'Fortify Attribute', affected: 'speed',
         affectedKind: 'attribute', magnitudeMin: 20, magnitudeMax: 20, duration: 60, range: 'self' },
@@ -48,7 +65,7 @@ const CORPUS: ParsedRecord[] = [
         affectedKind: 'attribute', magnitudeMin: 20, magnitudeMax: 20, duration: 60, range: 'self' },
     ],
   }),
-  rec({ recordId: 'BookSkill_Enchant1', type: 'BOOK', name: 'Feyfolken I', fullText: LONG_BOOK }),
+  rec({ recordId: 'fixture_book_01', type: 'BOOK', name: 'Feyfolken I', fullText: LONG_BOOK }),
 ];
 
 // ⚠️ THIS TEST USED TO `TRUNCATE game_records CASCADE`, and it destroyed real data: a 36,567-chunk
@@ -96,7 +113,7 @@ test('identical text is embedded ONCE -- dedup falls out of the content hash', {
 
   // ...and both rows still get the vector.
   const rows = await db.select({ id: gameChunks.chunkId, e: gameChunks.embedding })
-    .from(gameChunks).where(sql`${gameChunks.recordId} in ('info_1','info_2')`);
+    .from(gameChunks).where(sql`${gameChunks.recordId} in ('fixture_info_1','fixture_info_2')`);
   assert.equal(rows.length, 2);
   assert.deepEqual(rows[0].e, rows[1].e);
 });
@@ -169,14 +186,14 @@ test('every stored vector carries its provenance (the CHECK constraint)', { skip
 
 test('a record deleted from the plugin is removed, cascading to chunks and effects', { skip: skip() }, async () => {
   await run(CORPUS, new FakeEmbeddingProvider());
-  const without = CORPUS.filter((r) => r.recordId !== 'potion_skooma_01');
+  const without = CORPUS.filter((r) => r.recordId !== 'fixture_potion_01');
   const stats = await run(without, new FakeEmbeddingProvider());
 
   assert.equal(stats.orphanRecordsDeleted, 1);
   const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(recordEffects).where(inTestSource);
   assert.equal(n, 0, 'effects must go with their parent');
   const left = await db.select({ id: gameChunks.chunkId }).from(gameChunks)
-    .where(sql`${gameChunks.recordId} = 'potion_skooma_01'`);
+    .where(sql`${gameChunks.recordId} = 'fixture_potion_01'`);
   assert.equal(left.length, 0);
 });
 
@@ -186,14 +203,14 @@ test('a book that got SHORTER drops its tail chunks', { skip: skip() }, async ()
   // The record survives; only its later chunks should not. This is the orphan case a cascade
   // cannot catch, because nothing was deleted at the record level.
   const shorter = CORPUS.map((r) =>
-    r.recordId === 'BookSkill_Enchant1' ? { ...r, fullText: 'Just one short paragraph now.' } : r);
+    r.recordId === 'fixture_book_01' ? { ...r, fullText: 'Just one short paragraph now.' } : r);
   const stats = await run(shorter, new FakeEmbeddingProvider());
 
   assert.ok(stats.orphanChunksDeleted > 0);
   assert.ok(stats.chunksTotal < first.chunksTotal);
   const rows = await db.select({ id: gameChunks.chunkId }).from(gameChunks)
-    .where(sql`${gameChunks.recordId} = 'BookSkill_Enchant1'`);
-  assert.deepEqual(rows.map((r) => r.id), ['BookSkill_Enchant1#0']);
+    .where(sql`${gameChunks.recordId} = 'fixture_book_01'`);
+  assert.deepEqual(rows.map((r) => r.id), ['fixture_book_01#0']);
 });
 
 test('effects are replaced, not duplicated, on re-run', { skip: skip() }, async () => {

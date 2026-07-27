@@ -20,7 +20,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "ingest-corpus": "node --import tsx src/corpus/ingestCli.ts",
-    "bench-recall": "node --import tsx src/corpus/benchRecall.mts"
+    "bench-recall": "node --import tsx src/corpus/benchRecall.mts",
+    "verify-corpus": "node --import tsx src/corpus/verifyCorpus.mts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

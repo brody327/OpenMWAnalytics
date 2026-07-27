@@ -249,7 +249,7 @@ This is `06`'s JSONB-vs-columns debate returning, **and the answer is different 
 | --- | --- | --- |
 | schema defined by | any third-party mod, freely | the **engine** — `MGEF` is a fixed 137-entry set |
 | new shapes at runtime? | yes — the whole point (zero DDL) | no |
-| **cardinality** | one payload per row | **Skooma has 2 effects; spells have up to 8** |
+| **cardinality** | one payload per row | **Skooma has 4 effects; spells have up to 8** |
 | query needed | `GROUP BY suspect, topic` | filter with a **range predicate** |
 
 **Cardinality is the structural blocker.** A generated column is a function of *one row*; a
@@ -792,3 +792,84 @@ block of HTML-ish markup, and the corpus genuinely contains script comments like
   nothing queried it yet. Inserting 36,567 vectors into a live HNSW index would have paid graph
   maintenance per row. Load-then-index is the standard pattern; here it also produced the
   `maintenance_work_mem` measurement in §7.
+
+---
+
+## 12. ⚠️ The test fixture overwrote real corpus records (found + fixed 2026-07-27)
+
+**The best bug this project has produced**, because of how it was caught and how long it hid.
+
+### What happened
+
+`ingest.test.ts` built its fixture from **real record ids** — `potion_skooma_01`,
+`BookSkill_Enchant1` — for realism. `record_id` is the primary key, so every `npm test` against the
+dev database **upserted the fixture over the genuine records**: Skooma's four real effects were
+replaced by the two the fixture models, and its `source` flipped to `test.fixture`.
+
+| | |
+| --- | --- |
+| blast radius | **2 records of 34,785** · **4 effects of 2,960** (0.006%) |
+| duration undetected | ~1 day, across a merge, a deploy, and two full doc passes |
+| how it surfaced | **a contradiction between two independent observations** |
+
+### How it was caught — and why nothing else could have
+
+A player drank Skooma in-game and gained **+20 Strength** (`SkillCheckResolved.stat_modifier`,
+`base_value` 20 → `skill_value` 40). The corpus insisted Skooma does not affect Strength at all.
+Both sources were internally consistent; only *against each other* was either wrong.
+
+Nothing in the existing checks could have found it:
+
+| existing check | why it passed |
+| --- | --- |
+| 48 unit tests | the fixture was self-consistent — it defines the very rows it asserts |
+| parser conservation (`emitted + skipped == headers`) | the parser was **correct**; re-run today it yields all 4 effects |
+| effect-count distribution | ALCH reaches 6, ENCH 8 — no truncation signature to see |
+| idempotency / provenance guards | the row existed, with one model, one source |
+
+⭐ **Every conservation check in this project lived INSIDE a stage. Nothing verified the stage
+BOUNDARY that actually persists** — that what reached Postgres matched the `.esm`. The rule was
+already written down (*"when N things go in, assert N come out"*); it had simply never been pointed
+at the database.
+
+### The two fixes
+
+**1. `npm run verify-corpus -- <dump> <source>`** (`verifyCorpus.mts`) — re-parses the dump and
+reconciles it against the database, classifying every discrepancy (missing / extra / fewer effects
+/ more effects) and **exiting non-zero** so it can gate a release. It found the bug in seconds:
+
+```
+records missing from db  2
+    bookskill_enchant1
+    potion_skooma_01
+```
+
+**2. Fixture ids are now `fixture_*`, which is a correctness requirement, not a naming preference.**
+The 07-26 source-scoping fix stopped the tests *deleting* real data; it could never stop them
+*overwriting* it, because **a shared primary key does not care about the `source` column.** Realistic
+test data sharing a keyspace with real data is the hazard; fake ids close it.
+
+⚠️ **Two `npm test` runs during 2026-07-27's other work re-stamped the fixture over the real rows.**
+The contamination was not a one-off — it recurred on every test run, silently, and would have kept
+recurring.
+
+### Verified after the fix
+
+```
+records   dump=34785  db=34785
+effects   dump=2960   db=2960
+✅ database matches the dump
+```
+
+Re-ingest took **4.5 s** and re-embedded **14 chunks** — the hash-diff means repairing the corpus
+costs almost nothing, which is itself an argument for running `verify-corpus` routinely.
+
+Skooma now reads `Fortify Speed 20 · Fortify Strength 20 · Drain Agility 20 · Drain Intelligence 20`,
+matching the in-game verification exactly. The full attribution join then confirms the telemetry:
+`skill_value - base_value = 20` equals the Fortify Strength magnitude, so the item that caused the
+pass is identified from two independent observations rather than inferred.
+
+⚠️ **Doc correction:** §6's table said *"Skooma has 3 effects"*. Earlier on 2026-07-27 that was
+"corrected" to **2** to match the database — moving the doc *further* from the truth, because the
+database was the thing that was wrong. It is **4**. Trusting data over a doc is usually right; it
+is only right when the data has been verified against its source.
