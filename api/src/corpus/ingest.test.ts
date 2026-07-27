@@ -7,7 +7,7 @@
 // is what FakeEmbeddingProvider is for.
 import test, { after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db, pool } from '../db/client.js';
 import { gameChunks, gameRecords, recordEffects } from '../db/schema.js';
 import { ingestCorpus } from './ingest.js';
@@ -51,14 +51,26 @@ const CORPUS: ParsedRecord[] = [
   rec({ recordId: 'BookSkill_Enchant1', type: 'BOOK', name: 'Feyfolken I', fullText: LONG_BOOK }),
 ];
 
+// ⚠️ THIS TEST USED TO `TRUNCATE game_records CASCADE`, and it destroyed real data: a 36,567-chunk
+// corpus that cost 152 s and an API call to build was silently wiped by the next `npm test`. A
+// test that shares a database with development work must never reach beyond its own rows.
+//
+// Scoping by `source` is the fix at both ends — the test owns one source, and ingest's orphan
+// sweep is now scoped too (without that, a 4-record fixture still classified the whole corpus as
+// orphaned). Deleting one source's rows cascades to its chunks and effects via the FKs.
+const TEST_SOURCE = 'test.fixture';
+
 beforeEach(async () => {
   if (!dbUp) return;
-  // CASCADE reaches game_chunks and record_effects via their FKs.
-  await db.execute(sql`truncate table ${gameRecords} cascade`);
+  await db.delete(gameRecords).where(eq(gameRecords.source, TEST_SOURCE));
 });
 
-const run = (records: ParsedRecord[], provider: FakeEmbeddingProvider) =>
-  ingestCorpus({ db, provider, records, source: 'Morrowind.esm' });
+const run = (records: ParsedRecord[], provider: FakeEmbeddingProvider, source = TEST_SOURCE) =>
+  ingestCorpus({ db, provider, records, source });
+
+/** Every assertion must be scoped too: the same database also holds the real 36,567-chunk corpus,
+ *  so an unscoped `count(*)` would measure that instead of the fixture. */
+const inTestSource = sql`record_id IN (SELECT record_id FROM game_records WHERE source = ${TEST_SOURCE})`;
 
 test('first run writes records, chunks and effects', { skip: skip() }, async () => {
   const p = new FakeEmbeddingProvider();
@@ -71,7 +83,7 @@ test('first run writes records, chunks and effects', { skip: skip() }, async () 
   assert.ok(stats.chunksTotal > 4, 'the book should have chunked into several');
 
   const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` }).from(gameChunks);
+    .select({ count: sql<number>`count(*)::int` }).from(gameChunks).where(inTestSource);
   assert.equal(count, stats.chunksTotal);
 });
 
@@ -114,7 +126,7 @@ test('⭐ THE MODEL-SWAP TRAP: a new model re-embeds everything', { skip: skip()
   assert.equal(after2.chunksWritten, after2.chunksTotal);
   assert.ok(swapped.calls > 0);
 
-  const models = await db.selectDistinct({ m: gameChunks.embeddingModel }).from(gameChunks);
+  const models = await db.selectDistinct({ m: gameChunks.embeddingModel }).from(gameChunks).where(inTestSource);
   assert.deepEqual(models.map((r) => r.m), ['text-embedding-3-large'],
     'exactly one model may be present in the column');
 });
@@ -139,7 +151,7 @@ test('a dims change invalidates the key AND is refused by the column', { skip: s
   );
 
   // The failed run was one transaction, so nothing was written: the 384-dim corpus is intact.
-  const dims = await db.selectDistinct({ d: gameChunks.embeddingDims }).from(gameChunks);
+  const dims = await db.selectDistinct({ d: gameChunks.embeddingDims }).from(gameChunks).where(inTestSource);
   assert.deepEqual(dims.map((r) => r.d), [384]);
 });
 
@@ -161,7 +173,7 @@ test('a record deleted from the plugin is removed, cascading to chunks and effec
   const stats = await run(without, new FakeEmbeddingProvider());
 
   assert.equal(stats.orphanRecordsDeleted, 1);
-  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(recordEffects);
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(recordEffects).where(inTestSource);
   assert.equal(n, 0, 'effects must go with their parent');
   const left = await db.select({ id: gameChunks.chunkId }).from(gameChunks)
     .where(sql`${gameChunks.recordId} = 'potion_skooma_01'`);
@@ -187,6 +199,35 @@ test('a book that got SHORTER drops its tail chunks', { skip: skip() }, async ()
 test('effects are replaced, not duplicated, on re-run', { skip: skip() }, async () => {
   await run(CORPUS, new FakeEmbeddingProvider());
   await run(CORPUS, new FakeEmbeddingProvider());
-  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(recordEffects);
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(recordEffects).where(inTestSource);
   assert.equal(n, 2, 'a second run must not double the effect rows');
+});
+
+// ⚠️ REGRESSION FOR A REAL BUG. Orphan removal originally compared against EVERY row in
+// game_records, so ingest assumed it owned the whole table: running it for a second plugin would
+// have classified the first plugin's 34,785 records as orphans and deleted them. `source` exists
+// precisely so several plugins coexist (11 §2). This is also what let a 4-record test fixture
+// destroy a real 36,567-chunk corpus.
+test('⭐ ingesting a second source leaves the first one intact', { skip: skip() }, async () => {
+  const OTHER = 'test.fixture.other';
+  try {
+    await run(CORPUS, new FakeEmbeddingProvider());
+    const before = await db.select({ n: sql<number>`count(*)::int` })
+      .from(gameRecords).where(eq(gameRecords.source, TEST_SOURCE));
+
+    // A completely different plugin with its own records.
+    await run([rec({ recordId: 'other_1', fullText: 'A record belonging to another plugin.' })],
+      new FakeEmbeddingProvider(), OTHER);
+
+    const after = await db.select({ n: sql<number>`count(*)::int` })
+      .from(gameRecords).where(eq(gameRecords.source, TEST_SOURCE));
+    assert.equal(after[0].n, before[0].n, 'the first source must survive the second ingest');
+    assert.equal(before[0].n, 4);
+
+    const other = await db.select({ n: sql<number>`count(*)::int` })
+      .from(gameRecords).where(eq(gameRecords.source, OTHER));
+    assert.equal(other[0].n, 1);
+  } finally {
+    await db.delete(gameRecords).where(eq(gameRecords.source, OTHER));
+  }
 });

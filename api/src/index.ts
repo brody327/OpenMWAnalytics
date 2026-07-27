@@ -11,6 +11,7 @@ import { confrontations } from './stats/confrontations.js';
 import { friction } from './stats/friction.js';
 import { skills } from './stats/skills.js';
 import { ranking } from './stats/ranking.js';
+import { search } from './search/search.js';
 
 const app = express();
 app.use(express.json());
@@ -34,6 +35,10 @@ app.get('/stats/confrontations', confrontations);
 app.get('/stats/friction', friction);
 app.get('/stats/skills', skills);
 app.get('/stats/ranking', ranking);
+
+// Hybrid search over the game corpus (design docs 11). NOT under /stats: /stats reports on
+// TELEMETRY, this queries a second corpus -- the game's own text -- and joins to it.
+app.get('/search', search);
 
 // Central error handler (Express 5 forwards async rejections here).
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

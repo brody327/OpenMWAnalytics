@@ -11,7 +11,7 @@
 // leaves no half-corpus, but holding it open across minutes of network calls would pin a
 // snapshot, block vacuum, and turn one slow API response into database-wide pressure.
 
-import { inArray, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../db/schema.js';
 import { gameRecords, gameChunks, recordEffects } from '../db/schema.js';
@@ -224,7 +224,17 @@ export async function ingestCorpus(opts: IngestOptions): Promise<IngestStats> {
     const liveChunkIds = new Set(chunks.map((c) => c.chunkId));
     const liveRecordIds = new Set(records.map((r) => r.recordId));
 
-    const storedRecordIds = (await tx.select({ id: gameRecords.recordId }).from(gameRecords))
+    // ⚠️ SCOPED BY SOURCE, and this is not a detail. Without the filter, ingest assumes it owns
+    // the entire table: running it for `ccff.omwaddon` would classify all 34,785 Morrowind.esm
+    // records as orphans and delete them. `source` exists exactly so several plugins can coexist
+    // (11 §2), so an unscoped orphan sweep makes multi-source ingest silently destructive.
+    //
+    // It is also what made ingest.test.ts destructive: a 4-record fixture deleted a real
+    // 36,567-chunk corpus, which is how the local corpus was lost after the first `npm test`.
+    const storedRecordIds = (await tx
+      .select({ id: gameRecords.recordId })
+      .from(gameRecords)
+      .where(eq(gameRecords.source, source)))
       .map((r) => r.id);
     const orphanRecords = storedRecordIds.filter((id) => !liveRecordIds.has(id));
     for (const group of batches(orphanRecords)) {
@@ -232,7 +242,12 @@ export async function ingestCorpus(opts: IngestOptions): Promise<IngestStats> {
     }
     stats.orphanRecordsDeleted = orphanRecords.length;
 
-    const storedChunkIds = (await tx.select({ id: gameChunks.chunkId }).from(gameChunks))
+    // Same scoping, one level down: only chunks belonging to THIS source's records are candidates.
+    const storedChunkIds = (await tx
+      .select({ id: gameChunks.chunkId })
+      .from(gameChunks)
+      .innerJoin(gameRecords, eq(gameChunks.recordId, gameRecords.recordId))
+      .where(eq(gameRecords.source, source)))
       .map((r) => r.id);
     const orphanChunks = storedChunkIds.filter((id) => !liveChunkIds.has(id));
     for (const group of batches(orphanChunks)) {
