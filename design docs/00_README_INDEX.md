@@ -19,7 +19,7 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ⚠️ SDK is now a FACTORY (`require(...)(modId)`, breaking, 2026-07-23) — **not yet verified in-game**; auto path still open |
 | `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**; + migrations run as an initContainer and a CronJob folds the rollups (2026-07-22) |
 | `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20 |
-| `11_SEARCH_AND_RETRIEVAL.md` | Phase 4b: hybrid (lexical + vector) search over the game corpus, and its joins to telemetry. Grain, embeddings, schema, ingest, `tsvector`, RRF fusion. | 🟢 **steps 1–6 BUILT 2026-07-26** (`api/src/corpus/`, 48 tests); corpus still on FAKE embeddings; steps 7–8 open |
+| `11_SEARCH_AND_RETRIEVAL.md` | Phase 4b: hybrid (lexical + vector) search over the game corpus, and its joins to telemetry. Grain, embeddings, schema, ingest, `tsvector`, RRF fusion. | 🟢 **steps 1–6 BUILT 2026-07-26** (`api/src/corpus/`, 48 tests); corpus REALLY embedded 2026-07-26; step 7 `ef_search` curve measured (§10a); step 8 open |
 | `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |
 
 ## Source-of-truth rules
@@ -106,9 +106,10 @@ ingest authenticated. Remaining threads:
   — see **`11_SEARCH_AND_RETRIEVAL.md`**; parser, chunking, embedding providers and the ingest job
   live in `api/src/corpus/` with 48 tests. Steps 7–8 (index tuning + measurement; dashboard view +
   synthetic seeding) still open. Then 4c LLM insights.
-  - 🚨 **The corpus is embedded with a FAKE provider.** Vectors are deterministic, searchable and
-    semantically meaningless. **No recall, ranking or quality number is valid** until a real run
-    (~$0.026, needs `OPENAI_API_KEY`). Step 7 is blocked on it.
+  - ✅ **Really embedded 2026-07-26** (28,253 texts, 152 s, ~$0.026, `text-embedding-3-small@384`),
+    and **step 7's `ef_search` curve is measured** (`11 §10a`, `npm run bench-recall`): recall@10
+    89.3% at the default 40, **91.6% at 80 — the recommendation** — vs **~30× the cost** for exact
+    KNN. ⚠️ **LOCAL ONLY: prod RDS has no corpus yet** (ingest is local-first by necessity).
   - ⚠️ **This lifts the "blocked on volume" constraint below** — **36,567 chunks** × 384-dim
     vectors is the first genuinely large data the project has had, on a `db.t3.micro`. **MEASURED:
     `shared_buffers` = 185 MB (not the 256 MB assumed); HNSW index 56 MB = 30% of the pool; GIN
