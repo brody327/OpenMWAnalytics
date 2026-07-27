@@ -33,8 +33,10 @@ const KNOWN_TYPES = [
   'ConfrontationExited',
   'EvidenceCollected',
   'SkillCheckResolved',
+  'SkillCheckDisplayed',
   'PuzzleAttempted',
   'AreaEntered',
+  'ItemConsumed',
 ];
 
 export function EventFilters({ mods }: { mods: ModRow[] }) {

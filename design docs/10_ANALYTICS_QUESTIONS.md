@@ -135,8 +135,15 @@ volume term, so a check nobody attempts scores ≈ 0 — indistinguishable from 
 exist. Exposure separates *"everyone fails this"* from *"nobody even tries this"*, which are
 different problems with different fixes.
 
-Status: **mechanism identified, nothing designed or built.** Module 2 below remains unanswerable
-today; it is no longer unanswerable *in principle*.
+Status: ✅ **DESIGNED 2026-07-27** as `SkillCheckDisplayed` (`03`). All four gates above were
+settled, three of them by the learner re-deriving them independently:
+
+| gate | resolution |
+| --- | --- |
+| 1. does the panel know the checks + threshold at open time? | ⚠️ **still the one open feasibility question** — needs a read of `evidence_inspect.lua`. If only the top row of the 2×2 is buildable, say so rather than inferring the bottom. |
+| 2. grain per-check | ✅ confirmed. **Plus a grouping key** (`display_group`) so "saw 3, chose 1" is distinguishable from "saw 1, declined 1" — without it, choosing well looks identical to ignoring, and it inflates 2.5 |
+| 3. dedupe repeat opens | ✅ **emit every open; dedupe at QUERY time.** Deduping at emit destroys the "kept coming back to this check" hesitation signal. Same principle as `03`'s raw margin: derived values can be recomputed, raw ones cannot be recovered |
+| 4. name it `displayed` | ✅ kept — rendered ≠ read |
 
 ### 3.3 Honesty about sample size
 
@@ -263,7 +270,7 @@ The module authors most consistently underestimate, and the one with the highest
 | 2.2 | Of players who reach X, how many engage? | is the hook working | engaged ÷ exposed | `ConfrontationTopicEntered` ÷ `ConfrontationAttempted` | 🔵 designed |
 | 2.3 | Which optional/alternate routes get used? | is the branching worth it | route share | exposure + route id | ❌ |
 | 2.4 | Do players find the evidence needed for a check they failed? | discovery problem vs. reasoning problem | possession-at-attempt | `EvidenceCollected` × `ConfrontationAttempted.evidence_ids` | 🔵 designed |
-| 2.5 | **Is the bespoke failure prose ever read?** | **where to spend authoring bandwidth** | declined ÷ displayed, split by threshold-met (§3.2a's 2×2) | inspect-panel exposure event (**not designed**) | ❌ |
+| 2.5 | **Is the bespoke failure prose ever read?** | **where to spend authoring bandwidth** | declined ÷ displayed, split by threshold-met (§3.2a's 2×2) | `SkillCheckDisplayed` ÷ `SkillCheckResolved` | 🔵 **designed 2026-07-27** |
 
 **2.5 is new (2026-07-25, learner's question) and is the most unusual question in the inventory** —
 it is about where to spend *human effort*, not where players struggle. If players who cannot pass a
@@ -287,6 +294,24 @@ can diff it against what was seen. Design note, not a blocker.
 | 3.2 | Can a build without the "expected" skill finish? | accessibility of the critical path | completion rate by route | `SkillCheckResolved` + progression events | ❌ (needs 4.2) |
 | 3.3 | Which skills/attributes are actually gated on? | is the design as varied as intended | check count by `skill` / `stat_type` | `SkillCheckResolved` | 🔵 designed |
 | 3.4 | Do players gravitate to one solution when several exist? | are alternatives real or decorative | solution share per multi-route check | `SkillCheckResolved` + `require` | 🔵 designed |
+| 3.5 | **Do players reach for consumables to clear a stat gate, and which ones?** | is the gate passable by preparation, or only by build | boosted ÷ passed, by `item_id` | `ItemConsumed` + `SkillCheckResolved.base_value` | 🔵 **designed 2026-07-27** |
+| 3.6 | ⭐ **Does the game contain an accessible remedy for this gate at all?** | **add content, or retune the threshold** | corpus `record_effects` filtered to the gated stat, cross-referenced with what players actually used | `SkillCheckResolved` **× the corpus** (`11`) | 🔵 **designed 2026-07-27** |
+
+**3.6 is the question 4c exists to answer, and it is the only one here that leaves the telemetry
+database.** Every other row is a `GROUP BY` over events. This one joins *what players did* to
+*what the game contains* — `record_effects` already holds all 2,960 magic effects across 35 targets
+(all 8 attributes, all 27 skills), so "what could possibly fortify Personality, and is any of it
+reachable?" is a btree lookup we can already run (`11 §6`).
+
+⭐ **Note the inversion that makes it worth building:** every other question in this inventory can
+only say *players are failing*. 3.6 can say **why the failure is not the player's fault** — a gate
+with no accessible remedy in the content is a design gap, and the fix is authoring, not tuning.
+That is a recommendation about the *product*, derived from telemetry plus content, and it is the
+honest justification for reaching past a heuristic (`4c`).
+
+⚠️ **3.5 and 3.6 both require distinguishing a boosted stat from a natural one**, which
+`SkillCheckResolved` cannot do today: `skill_value` is the *modified* value, so 42 natural and
+30+12 are identical in the table. Resolved additively — see `03`.
 
 **Why this module matters:** it catches *"did I accidentally build this for my own
 character?"* — the most common blind spot in solo mod authorship, and invisible when

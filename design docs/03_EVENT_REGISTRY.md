@@ -376,6 +376,128 @@ stat is read, so no check was ever *resolved*. Correct per this event's grain.
 | `threshold_passed` | bool | whether the roll *honestly* cleared the bar (pre-override) |
 | `require` | string | `any` (OR) \| `all` (AND) — **omitted on single-stat checks** |
 | `skill_route` | string | CCFF's archetype counter key, when set |
+| `base_value` | int | **additive 2026-07-27** — the player's *unmodified* stat. See below |
+| `boost_magnitude` | int | **additive 2026-07-27** — fortify magnitude active on the deciding stat at resolve time, read directly from `activeEffects`. `0` when unboosted |
+
+### `base_value` / `boost_magnitude` — why both, and why neither is inferred (2026-07-27)
+
+`skill_value` is the player's **modified** value, so a natural 42 and a `30 + 12` are identical in
+the table today. Questions `10` **3.5** and **3.6** both need them separated.
+
+**`base_value` follows this doc's own raw-over-derived rule.** Do not emit `used_booster` — that
+bakes a judgment in at write time. Emit the raw unmodified stat and derive everything:
+
+| derived in SQL | meaning |
+| --- | --- |
+| `skill_value - base_value` | how much boost was in play |
+| `base_value < threshold AND skill_value >= threshold` | ⭐ **the boost is the ONLY reason this passed** |
+| `base_value >= threshold` | they'd have passed anyway; the potion was wasted |
+
+**`boost_magnitude` is read, not reconstructed** — `Actor.activeEffects(p):getEffect(
+core.magic.EFFECT_TYPE.FortifyAttribute, '<stat>')` returns the magnitude active *at the instant
+the check resolves* (verified in the 0.51 offline docs).
+
+⚠️ **A rejected design, recorded because it looks correct.** The obvious cheaper route is to skip
+both fields and reconstruct causality from event order: *"they consumed a +20 potion, then passed a
+check they previously couldn't."* It fails silently in at least four ways —
+
+| # | blind spot | what you'd wrongly conclude |
+| --- | --- | --- |
+| 1 | two sources stack (potion + enchanted ring) | credits the wrong item |
+| 2 | non-item fortifies (spell, birthsign) or a **Drain** from disease | delta points the wrong way |
+| 3 | the base value legitimately changed (level-up, training, skill book) | reads real progression as a potion |
+| 4 | the potion **expired** before the check | a consume event with no effect behind it |
+
+> **The rule: do not reconstruct what you can observe.** Reconstruction always yields a plausible
+> number, which is what makes it dangerous. The timestamp join still has a job — *attributing which
+> item* supplied the boost, where being occasionally wrong is acceptable because the primary fact
+> is already known directly.
+
+---
+
+## `SkillCheckDisplayed`
+
+**Status:** 🔵 **designed 2026-07-27, NOT implemented.** Third-party (CCFF).
+⚠️ **One feasibility gate is unresolved:** whether `evidence_inspect.lua` knows, at panel-open
+time, which checks exist *and* whether each threshold is met. If it only knows the former, the
+bottom row of `10 §3.2a`'s 2×2 is not buildable and **must not be inferred**.
+
+**Questions it answers:** `10` **Q2.5** (is the bespoke failure prose ever read → where to spend
+authoring bandwidth) and **Q3.2a**'s exposure denominator. Q2.5 is the inventory's only question
+about where to spend *human effort* rather than where players struggle.
+
+**Grain — one event per check displayed**, never per panel. Three checks on one panel = three
+events. A panel-level event was explicitly rejected: most panels contain no check at all, so it
+would fire constantly and answer nothing (*"events are justified by questions, not by
+capturability"*).
+
+**Dedupe policy: none at emit time.** Every panel open emits. Deduping here would destroy the
+"kept coming back to this check" hesitation signal, and the decline rate can be deduped at query
+time — raw values cannot be recovered, derived ones can always be recomputed.
+
+**`data` shape:**
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `check_id` | string | same id space as `SkillCheckResolved.check_id`, so the two join |
+| `display_group` | string | ⭐ groups checks shown **together**. See below — this is not optional |
+| `threshold` | int | the value needed, raw |
+| `skill` | string | the gated stat |
+| `stat_type` | string | `skill` \| `attribute` |
+| `threshold_met` | bool | ⚠️ **omit entirely if the panel cannot know it** — never default it to `false` |
+
+### ⚠️ `display_group` is what keeps Q2.5 honest
+
+Without it, a player who sees three checks and deliberately picks the one they can pass produces
+**two declines** — indistinguishable from someone who saw one check and walked away:
+
+| what happened | without `display_group` | with it |
+| --- | --- | --- |
+| saw 1, walked away | 1 decline | 1 decline, group size 1 |
+| **saw 3, chose the passable one** | **2 declines** | 2 declines, group size 3 — *engaged well* |
+
+Those are opposite findings, and the second is a player behaving exactly as designed. Since Q2.5
+feeds a conversation about reallocating a writer's time, inflating it is the expensive failure.
+
+---
+
+## `ItemConsumed`
+
+**Status:** 🔵 designed 2026-07-27. **First-party** — emitted by our own platform PLAYER script
+(`mod/scripts/omwanalytics/player.lua`), `mod_id = 'base'`.
+
+**Questions it answers:** `10` **Q3.5** (do players reach for consumables to clear a stat gate) and
+it supplies the behavioural half of **Q3.6** (is there an accessible remedy at all).
+
+⭐ **Why this is NOT a CCFF event.** Drinking a potion is a **base-game mechanic**, agnostic to
+which mod is watching — exactly like `AreaEntered`. Putting it in CCFF would scope a platform
+capability inside one consumer and make it useless to every other mod. It also removes the
+dependency on CCFF's instrumentation, which is still unverified in-game.
+
+**Seam: the `onConsume(item)` engine handler**, on a PLAYER local script.
+
+⚠️ **`ItemUsage` is the wrong seam and would have failed silently.** The obvious candidate —
+`I.ItemUsage.addHandlerForType` — cannot intercept actions from mwscripts, from the AI (*"drinking
+a potion in combat"*, per its own docs), or **from the quick-keys menu**, which is how players
+actually drink potions mid-dialogue. An event built on it would look completely functional while
+systematically missing the dominant path: fewer rows, no error, plausible numbers. `onConsume` sits
+downstream of *why* the item was consumed and has no such hole.
+
+**`data` shape — deliberately tiny:**
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `item_id` | string | the record id (`Potion.record(obj).id`) |
+| `item_type` | string | `potion` \| `ingredient` |
+
+⭐ **The payload carries no effects, on purpose.** `record_effects` (`11`) already holds every
+magic effect for all 34,810 game records, so what the item *does* is a join, not a field. This is
+the telemetry × corpus synthesis `10 §3.6` is built on, and it keeps the event at the coarsest
+grain that still answers its question.
+
+⚠️ **Two honest limits:** player-brewed alchemy potions have generated ids absent from the corpus,
+and an item from another mod is absent unless that mod's `.esm` was ingested. Both degrade to
+"unknown item" — a join miss, not an error.
 
 ### Why margin is stored raw, not computed
 
