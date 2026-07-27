@@ -873,3 +873,95 @@ pass is identified from two independent observations rather than inferred.
 "corrected" to **2** to match the database — moving the doc *further* from the truth, because the
 database was the thing that was wrong. It is **4**. Trusting data over a doc is usually right; it
 is only right when the data has been verified against its source.
+
+---
+
+## 13. World placement survey — DESIGNED 2026-07-27 (spike run, not yet built)
+
+The corpus knows what items **exist**. It does not know where they **are**, and `10 Q3.6` ("does the
+game contain an *accessible* remedy for this gate?") rests entirely on the word *accessible*.
+
+### Why survey the RUNNING GAME rather than parse more `.esm` files
+
+The obvious fix — ingest Tribunal, Bloodmoon and the rest — is worse on three counts:
+
+| | `.esm` parsing | `world.cells` survey |
+| --- | --- | --- |
+| **load order** | we would have to reimplement Morrowind's override semantics across 12+ files | ✅ **the engine has already merged it** |
+| **placement** | not in `esmtool`'s formatted dump at all (`--raw` subrecords only) | ✅ exact, per cell |
+| **mod content** | each plugin ingested separately, ids colliding across sources | ✅ included automatically |
+
+⭐ **The scale finding makes the case by itself: the running world has 11,553 cells.** Base
+`Morrowind.esm` has ~3,900. **Two-thirds of the world does not exist in the file we ingested** —
+so the corpus is not merely incomplete, it is describing a different game than the one being played.
+
+This is the **third** time this project has hit the same shape: the data is trapped on the client, so
+ship the computation to the data (`04` shipper, `11 §8` local-first ingest, now this).
+
+### MEASURED — spike, 2026-07-27
+
+| measure | value |
+| --- | --- |
+| cells | **11,553** |
+| cell sweep | ~0.28 ms/cell (3 × `getAll`) → **~3.2 s** full |
+| containers | ~19.4/cell → **~224,000** |
+| container probe | ~0.005 ms each → **~1.1 s** full |
+| **full survey** | **~4–5 s**, batched across frames |
+| loose potions | ~55 per 60 cells → **~10,600** |
+| ingredients | ~219 per 60 cells → **~42,000** |
+
+**Off-cell reads WORK.** 60 cells probed with the player in none of them: **0 errors**. Container
+contents likewise — **400 distant containers, 216 non-empty (54%), 0 failures**.
+
+⭐ **The discriminating check was the comparison, not the probe.** v1 sampled ONE container, got
+`ok, items=0`, and that result was worthless — it was a *mushroom* (`types.Container` includes
+harvestable flora), and an empty mushroom looks identical whether off-cell contents are readable or
+not. v2 compared **400 distant containers against the player's own definitely-loaded cell**
+(54% vs 12% non-empty). Distant containers being *more* populated is a result that could not occur
+if off-cell reads were degraded. *A probe that cannot distinguish the failure it tests for is not a
+probe.*
+
+⚠️ **Sample bias, recorded:** every example returned `egg_kwama00=1` — the first 60 entries in
+`world.cells` are exteriors, so the sample is flora-dominated and no **chest** was specifically
+read. The API is type-agnostic so the risk is low, but the sample was not representative.
+
+### Scope — merchant inventories are OUT, deliberately
+
+`Cell:getAll` finds containers, not NPC inventories, so *"does a trader sell one"* is unanswered.
+**Excluded on purpose (learner's call):** merchant stock is leveled-list RNG that restocks on a
+timer — it is not a stable surface a designer can reason about. The question this feature serves is
+**bespoke placement**: *"should I put a Fortify Personality item in the estate?"* Shop inventory is
+a different question with a different (and much noisier) answer.
+
+### Grain — `(area, item_record_id, count)`, never one row per object
+
+~10,600 potions + ~42,000 ingredients + ~155,000 container items ≈ **200,000 placements**. Emitting
+one line per object instance would be the retired-`Heartbeat` mistake at 200× the scale.
+
+The question is *"where can this item be found"*, so the grain is a **`GROUP BY`** — collapsing
+~200k instances to an estimated 20–30k rows, computed in Lua before anything is written.
+
+⭐ **The area key MUST match `AreaEntered`'s convention** (`03`): interior → `cell.name`, exterior →
+`cell.region`. This is the whole payoff — telemetry says *where players fail*, placement says *where
+the remedy is*, and they only join if both use the same notion of "area". Using raw cell ids here
+would produce a table that is correct and useless.
+
+### Transport — corpus data, NOT telemetry
+
+⚠️ **This must never go through the event pipeline.** It describes the *world*, not a player's
+behaviour; in `events` it would bloat storage and pollute every sequence query — exactly why `03`
+retired `Heartbeat` and why `06`'s `shipper_state` is a table rather than a stream.
+
+Same topology as the esmtool dump: a one-shot survey prints to `openmw.log` behind a sentinel that
+is deliberately **not** `OMWA1 ` (the shipper greps for that, so survey lines are invisible to it), a
+local extractor lifts them into a manifest, and the existing ingest CLI loads them
+`source='world-survey'` — local-first, because the world is on the author's machine.
+
+### ▶ Still to decide before building
+
+- table shape (`item_placements`: area, item_record_id, count, is_exterior, source)
+- ⚠️ **case**: `recordId` from Lua is **lowercase**; corpus ids are mixed-case. Join on
+  `lower(record_id)` or 12 of 353 consumables silently vanish (`03 ItemConsumed`)
+- whether the survey is one-shot manual or re-runnable per load order change
+- how a stale survey is detected — the world changes when the load order does, and a placement
+  table that silently describes an old load order is the same class of bug as `§12`

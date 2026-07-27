@@ -297,6 +297,18 @@ can diff it against what was seen. Design note, not a blocker.
 | 3.5 | **Do players reach for consumables to clear a stat gate, and which ones?** | is the gate passable by preparation, or only by build | boosted ÷ passed, by `item_id` | `ItemConsumed` + `SkillCheckResolved.base_value` | 🔵 **designed 2026-07-27** |
 | 3.6 | ⭐ **Does the game contain an accessible remedy for this gate at all?** | **add content, or retune the threshold** | corpus `record_effects` filtered to the gated stat, cross-referenced with what players actually used | `SkillCheckResolved` **× the corpus** (`11`) | 🔵 **designed 2026-07-27** |
 
+⚠️ **UPDATE 2026-07-27 — "accessible" is NOT computable from the corpus alone.** `game_records`
+stores name/type/text and `record_effects` stores effects; there is **no placement, no value, no
+vendor data**. The corpus also covers only `Morrowind.esm` while the running game loads 12+ content
+files — **11,553 cells versus ~3,900**. So the honest claim today is *"N items mechanically close
+this gap"*, **not** *"players can reach one"*.
+
+`11 §13` designs the fix: survey the **running game**, which has already merged the load order.
+Until that ships, **the UI must render reachability as UNKNOWN — never inferred.** This is the
+single place an LLM would fabricate most convincingly (*"sold by most apothecaries"*): fluent,
+plausible, probably even true, unverifiable from our data, and **indistinguishable from a computed
+fact**. Every other failure this project has hit had a tell; that one has none.
+
 **3.6 is the question 4c exists to answer, and it is the only one here that leaves the telemetry
 database.** Every other row is a `GROUP BY` over events. This one joins *what players did* to
 *what the game contains* — `record_effects` already holds all 2,960 magic effects across 35 targets
