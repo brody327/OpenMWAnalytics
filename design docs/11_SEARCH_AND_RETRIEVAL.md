@@ -249,7 +249,7 @@ This is `06`'s JSONB-vs-columns debate returning, **and the answer is different 
 | --- | --- | --- |
 | schema defined by | any third-party mod, freely | the **engine** — `MGEF` is a fixed 137-entry set |
 | new shapes at runtime? | yes — the whole point (zero DDL) | no |
-| **cardinality** | one payload per row | **Skooma has 3 effects; spells have more** |
+| **cardinality** | one payload per row | **Skooma has 2 effects; spells have up to 8** |
 | query needed | `GROUP BY suspect, topic` | filter with a **range predicate** |
 
 **Cardinality is the structural blocker.** A generated column is a function of *one row*; a

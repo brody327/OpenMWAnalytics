@@ -647,3 +647,44 @@ open-event would have caught. Judged not worth a whole event type at this stage.
 **The general rule:** an event that is reconstructible from events you are already
 emitting is not a new event — it is a query. Add it only when the reconstruction becomes
 unreliable or expensive.
+
+---
+
+## ✅ `ItemConsumed` — VERIFIED IN-GAME 2026-07-27
+
+Three consumes, three events, nothing extra. Log lines confirmed in `openmw.log`:
+
+| # | action | `item_id` | `item_type` | seq |
+| --- | --- | --- | --- | --- |
+| 1 | potion from inventory | `potion_skooma_01` | `potion` | 9 |
+| 2 | ingredient | `food_kwama_egg_01` | `ingredient` | 10 |
+| 3 | ⭐ potion from the **quick-keys hotkey** | `potion_skooma_01` | `potion` | 15 |
+
+⭐ **Test 3 is the one that mattered, and it was chosen because it could not pass under the failure
+we feared.** The rejected `ItemUsage` seam cannot observe quick-key usage; had we built on it, this
+consume would have produced *nothing*, with no error. Firing here proves the seam choice
+empirically rather than from documentation.
+
+Also confirmed: `mod_id = 'base'` (platform attribution, not `ccff`), ids lowercase as documented,
+`item_type` correctly separating `INGR` from `ALCH`, and exactly one event per consume.
+
+### ⭐ The corpus join works — and immediately falsified a design decision
+
+`lower(r.record_id) = item_id` against `game_records` + `record_effects`, first try:
+
+| item | effects |
+| --- | --- |
+| `potion_skooma_01` (Skooma) | **Fortify Attribute `speed` +20 / 60 s** *and* **Drain Attribute `agility` −20 / 60 s** |
+| `food_kwama_egg_01` (Small Kwama Egg) | Restore Fatigue — empty `affected`/`magnitude`, the documented `INGR` shape |
+
+⚠️ **Skooma both helps and harms.** A check gated on **Agility** would have been reported as
+*"no boost active"* by the morning's `activeEffects:getEffect(FortifyAttribute, 'agility')` design,
+while the player was in fact **20 points worse** for having drunk it — a query returning nothing,
+with nothing wrong. `.modifier` is signed and sees it. **A player self-sabotaging with a consumable
+is a real finding for `10` Q3.5, and the shipped-that-morning design was blind to it.**
+
+⚠️ **Doc `11 §6` said "Skooma has 3 effects"; the ingested corpus has 2.** Checked for systematic
+truncation — records carry up to **8** effects with a natural distribution (1,627 × 1, 203 × 2,
+62 × 3, 120 × 4, … 19 × 8) — so the parser is **not** dropping trailing effects. The doc's number
+was most likely a casual pre-ingest illustration; corrected to the measured value. **Not fully
+settled** — confirming Skooma's true count needs the 31 MB `esmtool` dump, which is not in the repo.
