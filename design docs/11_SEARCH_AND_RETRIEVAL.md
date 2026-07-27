@@ -891,9 +891,47 @@ The obvious fix — ingest Tribunal, Bloodmoon and the rest — is worse on thre
 | **placement** | not in `esmtool`'s formatted dump at all (`--raw` subrecords only) | ✅ exact, per cell |
 | **mod content** | each plugin ingested separately, ids colliding across sources | ✅ included automatically |
 
-⭐ **The scale finding makes the case by itself: the running world has 11,553 cells.** Base
-`Morrowind.esm` has ~3,900. **Two-thirds of the world does not exist in the file we ingested** —
-so the corpus is not merely incomplete, it is describing a different game than the one being played.
+⚠️ **CORRECTED 2026-07-27, same day — the first version of this section was WRONG.** It argued
+from "the running world has 11,553 cells vs ~3,900 in `Morrowind.esm`, so two-thirds of the world
+is missing." **That framing does not survive the learner's objection:**
+
+> *"This is a website measuring specific mods — not my entire load order. Base game and its
+> expansions are a stable base that will always be there; my load order is not stable."*
+
+Correct, and decisive. The corpus exists to describe **the base every author shares**, plus the
+**one mod being measured**. Measured breakdown:
+
+| source | cells | ALCH |
+| --- | --- | --- |
+| `Morrowind.esm` | 2,538 | 258 |
+| `Tribunal.esm` | 121 | 6 |
+| `Bloodmoon.esm` | 276 | 2 |
+| **stable base** | **2,935** | **266** |
+| *running game (one author's load order)* | *11,553* | — |
+
+So the real gap is **397 cells and 8 potions** (13% / 3%), not two-thirds. The other ~8,600 cells
+are one person's personal mods and belong nowhere near a shared corpus. ▶ **Ingest Tribunal and
+Bloodmoon; ignore everything else.**
+
+⚠️ **And this exposes a flaw in the survey itself: Lua cannot report an object's PROVENANCE.**
+`recordId` carries no source file, so a survey run on an author's normal setup would silently bake
+their personal mods' placements into a corpus meant to describe the shared base — the fixture bug's
+shape again, data from one context contaminating a dataset meant for another.
+**Therefore the survey is a BUILD STEP against a CONTROLLED load order** (base + expansions + the
+measured mod, nothing else), not a capture of a play session. Load order matters here because it
+must be *controlled*, not because it should be *recorded*.
+
+⚠️ **Blocked on a schema decision.** `game_records`' primary key is `record_id` **alone**, not
+`(source, record_id)`. Where Tribunal overrides a Morrowind record they collide: the later ingest
+silently wins and flips `source`. That is arguably correct load-order semantics, but it breaks
+`verify-corpus`, which reconciles per source — overridden records would read as "missing from
+Morrowind.esm". **A shared primary key does not care about the source column** (§12, third instance
+in one day). Decide deliberately: either the PK becomes `(source, record_id)` with resolution at
+query time, or ingest is explicitly ordered and `source` means *"the file that won."*
+
+✅ **Confirmed while measuring:** `potion_skooma_01` is defined **only** in `Morrowind.esm` — no
+Tribunal or Bloodmoon override. §12's bug was entirely the test fixture; load order was never
+involved, and it was reached for twice.
 
 This is the **third** time this project has hit the same shape: the data is trapped on the client, so
 ship the computation to the data (`04` shipper, `11 §8` local-first ingest, now this).

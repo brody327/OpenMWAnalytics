@@ -299,9 +299,12 @@ can diff it against what was seen. Design note, not a blocker.
 
 ⚠️ **UPDATE 2026-07-27 — "accessible" is NOT computable from the corpus alone.** `game_records`
 stores name/type/text and `record_effects` stores effects; there is **no placement, no value, no
-vendor data**. The corpus also covers only `Morrowind.esm` while the running game loads 12+ content
-files — **11,553 cells versus ~3,900**. So the honest claim today is *"N items mechanically close
-this gap"*, **not** *"players can reach one"*.
+vendor data**. The corpus also covers only `Morrowind.esm`, missing **Tribunal (121 cells / 6
+potions) and Bloodmoon (276 / 2)** — a bounded 13% / 3% gap. (An earlier version of this note
+compared against a personal 12-file load order and claimed two-thirds of the world was missing;
+that was wrong. The corpus describes **the stable base every author shares plus the mod being
+measured** — one author's mod list is not part of the product. See `11 §13`.) So the honest claim
+today is *"N items mechanically close this gap"*, **not** *"players can reach one"*.
 
 `11 §13` designs the fix: survey the **running game**, which has already merged the load order.
 Until that ships, **the UI must render reachability as UNKNOWN — never inferred.** This is the
