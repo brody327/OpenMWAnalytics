@@ -714,3 +714,85 @@ making a stalled fold **visible instead of a silent hole**.
 
 The mixed case is the one that matters — it is the only one where a double-count or a dropped
 session could hide, and it is the state production is always in.
+
+---
+
+## The corpus tables (added 2026-07-26, migration `0005`)
+
+The *design reasoning* lives in `11 §6` (why effects are relational, why the grain is a chunk).
+This section owns the **storage facts**: what exists, what it costs, and how writes behave.
+
+```
+game_records    34,785 rows   one row per game record — what a search RETURNS
+game_chunks     36,567 rows   one row per embeddable unit — what a search SCANS
+record_effects   2,960 rows   one row per magic effect — 1-to-MANY, the reason it is relational
+```
+
+`CREATE EXTENSION vector` ships **in the migration**, not as a manual step — the deploy path is
+`09 §7`'s initContainer, and the standing lesson from the prod-500 is that anything the app
+requires but the migration does not create is a 500 waiting for the next fresh environment.
+
+### Two constraints doing real work
+
+**`tsv` is a GENERATED column** — `to_tsvector('english', text)` — so it cannot drift from `text`,
+the same argument as `events.suspect/topic` (§3). The config is a **hard-coded literal and must
+be**: Postgres rejects the one-argument `to_tsvector()` here because it reads a session GUC and is
+therefore not `IMMUTABLE`. That rejection is the engine enforcing index/query symmetry for us.
+
+**A CHECK ties the vector to its provenance:**
+
+```sql
+CHECK ((embedding IS NULL) = (embedding_model IS NULL)
+   AND (embedding IS NULL) = (embedding_dims  IS NULL))
+```
+
+A vector whose origin is unknown cannot exist. Combined with `vector(384)` being a **fixed-width
+type**, there are two independent defences against a mixed column, and the schema-level one does
+not depend on application code getting the idempotency key right (`11 §8`).
+
+### Index cost — MEASURED, not estimated
+
+| index | size | note |
+| --- | --- | --- |
+| `game_chunks_embedding_hnsw_idx` | **56 MB** | ~**1.04×** the raw vector column, not the 1.25–2× assumed |
+| `game_chunks_tsv_idx` (GIN) | **6 MB** | **9.3× cheaper** — the semantic half is the expensive half |
+| `game_chunks_record_idx` | 2.5 MB | parent rollup + orphan sweep |
+
+At 384 dims a node's *data* (1,536 bytes) dwarfs its *graph links* (~32 × 6 bytes), so HNSW is
+barely larger than the vectors it holds. Against the measured **185 MB** `shared_buffers` on
+`db.t3.micro`, that is **30% of the pool** — the number that justified 384 dims (`11 §5`).
+
+### ⚠️ The vector column is TOASTed, and it changes what a scan costs
+
+`game_chunks` is **58 MB heap + 19 MB TOAST**; `embedding` has `avg_width` 1,071 (compressed from
+1,544) and is stored externally. A sequential scan therefore reads ~7,400 heap pages **and then
+does a per-row detoast fetch for ~30,000 vectors** — 41,509 buffers and ~27 ms, against 844
+buffers and ~2.5 ms for the HNSW path.
+
+> The index is not merely touching fewer pages — it **avoids an access pattern**. HNSW stores
+> vectors in its own pages and the query projects only `chunk_id`, so the fast path never
+> detoasts at all.
+
+**Deliberately not tuned.** `ALTER COLUMN embedding SET STORAGE PLAIN` would remove the detoast,
+but the only full scans are the step-7 benchmark's ground truth and the ~30-row pre-filtered
+recommendation path, where 30 detoasts are free. It would speed up nothing a user touches.
+
+### Write semantics: upsert by content hash, orphan sweep scoped by source
+
+Ingest is idempotent on `text_hash + embedding_model + embedding_dims` (`11 §8`). Re-running over
+an unchanged corpus writes nothing: **36,567 skipped, 0 embedded, 2.7 s** against 173 s for a cold
+run. A partial change costs only its own rows — enriching item text touched 2,063 chunks and took
+**17 s**.
+
+⚠️ **A real bug, fixed 2026-07-26.** Orphan removal originally compared the parsed set against
+**every** row in `game_records`, i.e. ingest assumed it owned the whole table. Two consequences:
+
+1. Ingesting a second plugin would have deleted the first one's records — and `source` exists
+   precisely so plugins coexist.
+2. It made the integration test destructive: a 4-record fixture classified a real 36,567-chunk
+   corpus as orphaned, so `npm test` silently destroyed it. Found only when a search returned
+   fixture text instead of Morrowind text.
+
+Orphan sweeps are now scoped `WHERE source = $source`, the test owns its own `source`, and a
+regression test asserts two sources survive each other. **General rule: "delete everything not in
+my input" is only safe if you actually own everything.**

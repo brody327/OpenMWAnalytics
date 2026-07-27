@@ -15,6 +15,39 @@ Collect behavioral telemetry from OpenMW mods, store it, and turn it into
      emit                     durable buffer            transport             validate            store               visualize
 ```
 
+### A SECOND ingestion path, added 2026-07-26 (`11`)
+
+Telemetry is not the only corpus any more. Phase 4b indexes the **game's own text** — dialogue,
+books, cells, spells, items — and joins it to telemetry:
+
+```
+┌────────────────┐  esmtool  ┌───────────┐  parse/chunk  ┌────────────┐  embed   ┌──────────┐
+│ Morrowind.esm  │ ────────▶ │ text dump │ ────────────▶ │  Ingest    │ ───────▶ │ OpenAI   │
+│ (local only)   │           │  (31 MB)  │               │  (Node)    │ ◀─────── │ (vectors)│
+└────────────────┘           └───────────┘               └─────┬──────┘          └──────────┘
+                                                               │ upsert
+                                                               ▼
+                                                        ┌────────────┐
+                                                        │  Postgres  │  game_records / game_chunks
+                                                        │ + pgvector │  / record_effects
+                                                        └────────────┘
+```
+
+**It is the same shape as the shipper for a different reason.** The shipper runs locally because
+the Lua sandbox has no network; corpus ingest runs locally because **the `.esm` files cannot leave
+the machine** (80 MB of copyrighted Bethesda data, not going into a container image). Second time
+this project has hit *"the data is trapped on the client"* — the pattern is **ship the computation
+to the data, not the data to the computation**, and both are instances of it.
+
+⚠️ **Two consequences that are easy to miss:**
+
+- **Populating production is a manual, local operation.** RDS is not publicly reachable (private
+  VPC address), so ingest reaches it through an **SSH tunnel via the EC2 box** (`09 §8`). Nothing
+  in CI can do this, and nothing does it on a schedule.
+- **The API now calls an external service on a request path** (`GET /search` embeds the query),
+  which was not true of any other endpoint. It degrades to lexical-only rather than failing
+  (`05`), but the dependency is real.
+
 ## Why this shape? The load-bearing constraint
 
 OpenMW's Lua runs in a **security sandbox with no network access and no

@@ -192,3 +192,82 @@ another author's mod; **the trust boundary is here, not there.**
 Ingest also **auto-registers** every mod id in a batch (one upsert, deduped in JS), after the
 event insert and deliberately outside it: the registry is derived convenience, and failing to
 refresh a `last_seen_at` must never cost us events.
+
+---
+
+## `GET /search` — hybrid search over the game corpus (added 2026-07-26)
+
+The first user-reachable path into Phase 4b's second corpus (`11`). Read-side and therefore
+**open**, like `/stats/*` and `/events`.
+
+```
+GET /search?q=bribing%20the%20guards&limit=10
+```
+
+```jsonc
+{
+  "query": "bribing the guards",
+  "mode": "hybrid",              // or "lexical" — see degradation below
+  "took_ms": 606,
+  "results": [{
+    "record_id": "TG_BrotherBragor#273315646829231659",
+    "type": "INFO", "name": "TG_BrotherBragor", "source": "Morrowind.esm",
+    "snippet": "…Shadbak gra-Burbug, a guard in Fort Pelagiad, has been taking bribes…",
+    "rrf_score": 0.0292,
+    "lexical_rank": 3,           // null when that retriever did not return it
+    "vector_rank": 15
+  }]
+}
+```
+
+`limit` is clamped to 50. A missing `q` is a `400`.
+
+### Why the ranks are in the response
+
+`lexical_rank` / `vector_rank` are not debug output — they are the reason RRF was chosen over a
+weighted sum (`11 §10`). *"1st lexically, 15th semantically"* is an explanation a UI can render;
+`0.0292` is not. The one opaque component (the embedding) is confined to producing **one
+ordering**; everything downstream stays inspectable.
+
+### ⚠️ This is the first endpoint that calls an external service
+
+Every other endpoint is Postgres and nothing else. Three consequences:
+
+| | |
+| --- | --- |
+| **Latency inverts** | embedding the query ≈ **1,100 ms**, the database work ≈ **2 ms**. Search is a *network* problem; no index tuning touches the dominant term. |
+| **Availability** | a bounded in-process cache of query vectors (**~400 ms → ~40 ms** on a repeat) plus **degradation**: if the provider fails or no key is configured, the semantic half is dropped and the response says `"mode": "lexical"`. The lexical half is a complete search on its own, so failing the whole request would be wrong. |
+| **Spend** | per-request cost where previously there was none. Bounded by the cache and by how many *distinct* queries users type. |
+
+The cache is keyed by query text **alone**, which is correct only because the provider is fixed
+for the process lifetime. If the model ever became per-request, that key would need the model in
+it — the same trap as `11 §8`, one layer up.
+
+### Query shape (see `11 §10` for the reasoning)
+
+- `hnsw.ef_search = 80`, the measured value (`11 §10a`), set **inside a transaction** — `SET LOCAL`
+  outside one is a warning and a silent no-op.
+- `FULL OUTER JOIN` between the two ranked lists. **Load-bearing:** an `INNER JOIN` would require
+  both retrievers to return a document, silently discarding semantic-only hits — the entire reason
+  the 56 MB vector index exists. Verified live: one query returns a both-retrievers hit, a
+  lexical-only hit and a semantic-only hit.
+- **Parent-document rollup** (one row per record, best chunk wins) **and text dedup** — 23% of the
+  corpus is exact-duplicate text, so without it the same stock line repeats under different ids.
+
+### ⚠️ Known limitation, verified not hidden
+
+Domain jargon does not always survive the embedding. The corpus contains
+`"Fortify Attribute personality"` and ranks it **#1–3** for the query *"fortify personality"* — but
+*"a potion that makes you more persuasive"* returns nothing relevant in the top 400.
+`text-embedding-3-small` does not connect *persuasive* to *personality*; in Morrowind that is a
+stat name, and the model reads it as the ordinary English word.
+
+This is a **model** limitation, not a data one, and it is bounded: the flagship product question
+("what content could serve this check") is answered by an **exact relational filter** over
+`record_effects`, which never touches the vector index (`11 §7`). Only the fuzzy search box is
+affected. Options if it ever matters: document expansion with domain synonyms, or `3-large`.
+
+### Deployment gap
+
+**Production has no `OPENAI_API_KEY`**, so `/search` there reports `"mode": "lexical"` until one is
+added to the k8s Secret (`09 §2`).

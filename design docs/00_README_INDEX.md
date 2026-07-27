@@ -9,15 +9,15 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | File | Purpose | Status |
 | --- | --- | --- |
 | `00_README_INDEX.md` | This index + source-of-truth rules. | living |
-| `01_ARCHITECTURE_OVERVIEW.md` | The end-to-end pipeline, components, and what has been validated. | ✅ ingestion validated |
+| `01_ARCHITECTURE_OVERVIEW.md` | The end-to-end pipeline, components, and what has been validated. | ✅ ingestion validated; + a SECOND ingestion path 2026-07-26 (local corpus -> RDS, §The pipeline) |
 | `02_EVENT_ENVELOPE.md` | The event envelope contract: universal metadata vs. event-specific payload, time model, versioning, delivery/ordering guarantees. **The foundational contract.** | ✅ locked |
 | `03_EVENT_REGISTRY.md` | Catalog of canonical event `type`s and their `data` shapes (the "tracking plan") — now the **public contract** third parties emit against. | 🟢 2 live (`AreaEntered`, `ConfrontationAttempted`); 3 exposure events designed 2026-07-20; `Spike*`/`Heartbeat` retired |
 | `04_SHIPPER_DESIGN.md` | The Node log-tailing shipper: offset tracking, truncation handling, batching, retries, at-least-once; operating it. | ✅ reliability pass done 2026-07-18 (durable offset, relaunch detection, at-least-once); §5 adds the first-run EOF trap + recovery |
-| `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested; read side adds `GET /events` (keyset) + `GET /mods` 2026-07-23 |
-| `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented |
+| `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested; read side adds `GET /events` (keyset) + `GET /mods` 2026-07-23, and **`GET /search`** 2026-07-26 — the first endpoint calling an EXTERNAL service |
+| `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented; + corpus tables & pgvector 2026-07-26 (measured index costs, TOAST, source-scoped orphan sweep) |
 | `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes; offline degradation. | 🟢 **live at `omwanalytics.com`**; + event explorer, nav, drill-down (2026-07-23) + **stuck-ranking view** `GET /stats/ranking` (§7, 2026-07-24) — both **not yet deployed** |
 | `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ⚠️ SDK is now a FACTORY (`require(...)(modId)`, breaking, 2026-07-23) — **not yet verified in-game**; auto path still open |
-| `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**; + migrations run as an initContainer and a CronJob folds the rollups (2026-07-22) |
+| `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**; + migrations via initContainer + CronJob rollups (2026-07-22); §8 adds the corpus deploy — **manual, tunnelled, un-CI-able** (2026-07-26) |
 | `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20 |
 | `11_SEARCH_AND_RETRIEVAL.md` | Phase 4b: hybrid (lexical + vector) search over the game corpus, and its joins to telemetry. Grain, embeddings, schema, ingest, `tsvector`, RRF fusion. | 🟢 **steps 1–6 BUILT 2026-07-26** (`api/src/corpus/`, 48 tests); corpus REALLY embedded 2026-07-26; step 7 `ef_search` curve measured (§10a); step 8 open |
 | `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |

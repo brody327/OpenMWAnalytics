@@ -1469,3 +1469,58 @@ KNN, out-of-distribution queries, buffers-vs-wall-clock, TOAST and detoasting.
 ▶ **Re-test candidates, in priority order:** Q3's silent-asymmetry failure (missed outright, and it
 is the pattern the whole day produced), then Matryoshka in a *different form* — I have now
 explained it twice, so a third explanation is not the answer; a hands-on comparison is.
+
+---
+
+## ▶ PLAN FOR NEXT SESSION (written 2026-07-26 at session close)
+
+### 1. Opening retrieval check — ~6 questions, and the list is fixed, not improvised
+
+Sized to the material (skill §2). Two of these are **re-tests of things that did not land**, which
+matters more than covering new ground:
+
+| # | concept | why | form |
+| --- | --- | --- | --- |
+| 1 | **asymmetric `tsvector` config** | ❌ missed outright 07-26; gave an *efficiency* answer to a *correctness* question | prediction — "index `english`, query `simple`, user searches `guards`: what returns, what does the log say?" |
+| 2 | **Matryoshka** | ✅ repaired 07-26, but only after two explanations — needs to survive a day boundary | ⚠️ **NOT a third explanation.** Hands-on: truncate a real vector, compare cosine before/after |
+| 3 | JSONB range-predicate **false match** | never assessed | debug — hand them the Skooma clause, ask for the wrong row |
+| 4 | why **multiply turns OR into AND** in score fusion | never assessed | prediction |
+| 5 | **recall measured via exact KNN** | taught 07-26, unassessed | explain-back — "how do you know the index missed something?" |
+| 6 | **buffers vs wall-clock** | taught 07-26, unassessed | judgment — "two runs, identical buffers, p50 differs 60%. Which do you report?" |
+
+### 2. ⭐ The theme worth teaching explicitly, because the session produced SIX instances
+
+**"Looks right" and "is right" are indistinguishable without an independent check.** Every failure
+on 2026-07-26 was silent and plausible:
+
+| # | failure | what caught it |
+| --- | --- | --- |
+| 1 | 5,286 id-less headers folded into the previous record | header count did not reconcile |
+| 2 | 708 ENCH records + 1,069 effects dropped | effect count did not reconcile |
+| 3 | 99 INFO ids colliding across topics | Postgres `21000` |
+| 4 | a test that **could not fail** (uniform vectors normalize identically) | mutation — deleted the sort, watched it fail |
+| 5 | benchmark measuring one config against itself (`SET LOCAL` outside a transaction) | identical buffers across "different" plans |
+| 6 | ingest deleting a real corpus (unscoped orphan sweep) | a search returned fixture text |
+
+The three techniques that did the catching, and they generalize: **conservation counts** (N in, N
+out, classified), **plan/constraint assertions** (assert what actually ran), and **mutation checks**
+(break the code, confirm the test notices). Teach as one lesson, not six anecdotes.
+
+### 3. ⚠️ Dashboard work: the learner asked for SLOW, decision-by-decision React
+
+Requested at session close 2026-07-26: *"When we go through the dashboard work I want to go slowly
+through the actual react coding/decision making to understand it."*
+
+This is the **step-by-step mode** from `feedback-4b-step-by-step-mode` applied to React — but note
+the difference: for retrieval there was no senior-level prior, whereas here there IS deep Angular /
+TypeScript strength to build on. So the teaching should target **where React differs from Angular**
+(server vs client components, no DI, rendering model, data fetching) rather than re-explaining
+component-oriented UI. One decision per step, learner makes the call, jargon defined in place.
+
+Prior React work is DONE and landed (07-23 fundamentals quiz, `/mods/[modId]`) — build on it, do
+not restart it.
+
+### 4. Still unassessed after everything
+
+Concepts 6, 7, 10 from the 07-25 list, plus all of step 7's material except what question 5 and 6
+above cover. Do not let the dashboard bury them.

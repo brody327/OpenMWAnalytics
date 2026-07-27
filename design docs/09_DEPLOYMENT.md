@@ -311,3 +311,69 @@ Proper fixes, in ascending order of effort: pin both manifests to an immutable `
 roll them together (also fixes the traceability caveat already noted on the Deployment); or run
 migrations as a pre-deploy Job that both workloads wait on; or have the fold no-op cleanly when
 its schema is not yet present. Not urgent while the fold is the only scheduled workload.
+
+---
+
+## 8. Deploying the corpus (2026-07-26) — the first thing CI cannot do
+
+Phase 4b (`11`) shipped a second corpus, and getting it into production exposed a boundary the
+rest of the platform does not have.
+
+### The schema half went through the existing path, unchanged
+
+`kubectl rollout restart deployment/omwa-api` → `imagePullPolicy: Always` pulls the CI-built
+`latest` → the **initContainer** (`§7`) runs `dist/jobs/migrate.js` → migration `0005` applies.
+Verified after the fact rather than trusted: `pg_extension` gained `vector 0.8.2`, three tables
+appeared, `drizzle.__drizzle_migrations` went 5 → 6, and both the API and dashboard stayed 200.
+
+⚠️ **The migrate log said `schema up to date in 163 ms` — after applying a migration.** It does not
+distinguish "applied one" from "nothing to do", which is a small observability gap worth closing:
+a silent success and a silent no-op read identically.
+
+### The data half cannot go through CI at all
+
+**Ingest must run locally** (the `.esm` files cannot leave the machine, `01`) and **RDS is not
+publicly reachable** (its endpoint resolves to a private VPC address, by design — `§3`). So the
+corpus reaches production through an **SSH tunnel via the EC2 box**:
+
+```bash
+ssh -i omwa-key.pem -N -L 15432:omwa-db.<id>.us-east-2.rds.amazonaws.com:5432 ubuntu@<eip>
+
+DATABASE_SSL=true \
+DATABASE_URL=postgresql://omwa:<pw>@localhost:15432/omwanalytics \
+  npm run ingest-corpus -- <dump> Morrowind.esm
+```
+
+171 s end to end — only ~19 s slower than the same run against local Postgres. TLS still
+terminates at RDS (the tunnel is plain TCP forwarding), and the client's `rejectUnauthorized:
+false` is what lets the hostname mismatch through.
+
+> **This is a manual, human-run deployment step with no automation and no schedule.** It is the
+> only part of the platform in that category, and it follows from a constraint (`01`), not an
+> omission.
+
+### ⚠️ Bulk-load ordering — a window that has now closed
+
+The HNSW index was **dropped before the load and rebuilt after**. That was free *only* because the
+table was empty and nothing queried it; inserting 36,567 vectors into a live index pays graph
+maintenance per row. Standard load-then-index, and it produced a measurement:
+
+```
+NOTICE:  hnsw graph no longer fits into maintenance_work_mem after 28368 tuples
+DETAIL:  Building will take significantly more time.
+```
+
+78% of the graph fit in the instance's 64 MB, and the whole build still took **19.5 s**. So the
+"slow path" this document worried about is nineteen seconds, once — which retroactively justifies
+having refused to raise `maintenance_work_mem` (autovacuum inherits a parameter-group value;
+3 workers × 256 MB would OOM a 1 GB box, and an OOM on RDS restarts Postgres).
+
+**Any future corpus refresh no longer has this window** — the tables are populated and `/search`
+queries them, so a reindex is now a deliberate operation with a visible impact.
+
+### ⚠️ Outstanding: `OPENAI_API_KEY` is not in the cluster
+
+`GET /search` embeds the query at request time. Production has no key, so it currently reports
+`"mode": "lexical"` — degraded, not broken (`05`). Adding it means extending the existing k8s
+Secret; it is the first **runtime** external credential the API has needed, as distinct from the
+ingest token it merely verifies.
