@@ -292,3 +292,33 @@ restores it cleanly — which is exactly the path verified in the self-heal test
 
 ✅ **End-to-end verified in prod 2026-07-27:** single shipper, `/ops/freshness` → `200 ok:true`,
 install registered at age 0m.
+
+### ✅ The alert path was FIRED, not assumed (2026-07-27)
+
+An endpoint that returns 503 and an alert that reaches a human are different claims, and only the
+second one would have changed the 07-20 outcome. So the notification path was tested by causing a
+real incident rather than by reasoning about it.
+
+**Method — simulate the actual failure, not a symptom.** Aging `last_seen_at` alone is not enough:
+the shipper heartbeats every 5 minutes and would heal the row before the monitor's next poll. So
+the shipper was stopped *and* its self-heal trigger disabled for the duration, then the prod
+timestamp aged past the 120-minute threshold.
+
+| observation | result |
+| --- | --- |
+| `/ops/freshness` | **503**, `age=180m`, `stale=true` |
+| `/health` **during the incident** | **200** — Kubernetes correctly took no action |
+| **UptimeRobot freshness monitor** | ✅ **alert delivered** |
+| UptimeRobot API-uptime monitor | stayed **Up** |
+
+⭐ **Two monitors, one firing.** That discrimination is the whole point: on 2026-07-20 every signal
+in existence was green while the pipeline was dead. Now the failing signal is the pipeline's, and
+the API's is untouched — which also means the alert says *what* broke, not merely *that*
+something did.
+
+⭐ **Recovery was self-healing and was verified as such.** The row was never edited back. Re-enabling
+the task and starting the shipper was enough: its startup heartbeat overwrote `last_seen_at`, and
+`/ops/freshness` returned to `200 ok:true age=0m` on its own. The recovery path a real incident
+would take is therefore also tested, not just the detection path.
+
+**Final state confirmed green:** `/health` 200 · `/ops/freshness` 200 · `omwanalytics.com` 200.
