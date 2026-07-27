@@ -89,6 +89,38 @@ merely documented.
 
 ▶ **Still unassessed: 2, 5 (retest), 9, 10, 11, 12.** Do not let the build bury them.
 
+### Later the same day — step 7 prediction checkpoint (`ef_search`)
+
+Three predictions taken before running the recall benchmark.
+
+| Q | assessment | result |
+| --- | --- | --- |
+| 1 — does recall have a ceiling? | prediction | ⚠️ **my question was ambiguous** — "ceiling" was not defined. Learner reasoned correctly about mechanism ("it's blind to everything outside the candidate list") but did not address the shape |
+| 2 — is latency linear in `ef_search`? | prediction | ❌ **answered a different question** (whether the search re-runs). Shape left open |
+| 3 — anything awkward about `k=10` with `ef_search=10`? | transfer | ✅ **the strongest answer of the day — see below** |
+
+⭐ **Q3 was genuinely sophisticated, and unprompted.** The learner identified that **recall@k is a
+SET metric** — order-insensitive within the returned k — so a 10-candidate list for k=10 leaves
+nothing to discriminate, and then named **NDCG@10** as the rank-aware alternative. That is real IR
+vocabulary arriving without being taught. The measurement confirmed it: `ef_search=10` is the worst
+configuration at **79.9%**, ~10 points below default, because pgvector clamps `ef_search ≥ k` so the
+candidate list has zero slack.
+
+Refinement taught in return: **HNSW's approximation is in *which* items it finds, not how it orders
+them** (distances are exact for every candidate), so NDCG would largely track recall here — the
+instinct is right in general, redundant against *this* approximation.
+
+**New material taught, NOT yet assessed** (add to the unassessed list): recall-via-exact-KNN as
+ground truth · why out-of-distribution queries are mandatory · **buffers as the trustworthy cost
+signal vs. noisy wall-clock** · TOAST and per-row detoast on a sequential scan · why HNSW's fast
+path avoids detoasting entirely.
+
+⚠️ **Two more of my own fake-result bugs today** (5 and 6): queries sampled from the indexed corpus,
+and `SET LOCAL` outside a transaction silently doing nothing. Both produced clean, plausible,
+completely fake tables. Combined with the test-that-could-not-fail earlier, **the day's real theme
+is that "looks right" and "is right" are indistinguishable without an independent check** — a
+conservation count, a plan assertion, or a mutation test.
+
 ---
 
 ## 2026-07-25 (cont.) — Phase 4b designed end-to-end: retrieval, embeddings, hybrid search
