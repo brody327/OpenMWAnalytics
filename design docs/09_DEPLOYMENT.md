@@ -380,10 +380,10 @@ ingest token it merely verifies.
 
 ---
 
-## ⚠️ Search is NOT live in prod yet (found 2026-07-27)
+## ✅ Search in prod — broken on 2026-07-27, fixed the same day
 
-`GET /search` merged to `main` on 2026-07-26 and the corpus is populated in prod RDS, but the
-endpoint is **not reachable** on `api.omwanalytics.com` — a live request returns
+`GET /search` merged to `main` on 2026-07-26 and the corpus was populated in prod RDS, but the
+endpoint was **not reachable** on `api.omwanalytics.com` — a live request returned
 `Cannot GET /search`. Two independent causes, both worth recording because neither is a code bug:
 
 | # | cause | fix |
@@ -403,3 +403,46 @@ the specific thing you changed.**
 from `main` via Vercel's Git integration; the API does **not** auto-rollout. So a push that changes
 both ships the frontend immediately and the backend never — which is precisely the ordering that
 produces a live page calling an endpoint that does not exist yet.
+
+### Timeline that proves cause 1 (not inferred — measured)
+
+| when | what |
+| --- | --- |
+| 2026-07-26 **19:38** CDT | pod `omwa-api-75445fc564-p2t4q` starts (the 07-26 corpus rollout) |
+| 2026-07-26 **20:23** CDT | `GET /search` merges to `main` (`df5014f`) — **45 minutes later** |
+
+The pod was 18 h old and predated the code by three quarters of an hour. Nothing was wrong; the
+running image simply had never contained the route.
+
+### The fix, as applied 2026-07-27
+
+```bash
+# kubectl on the node needs sudo — k3s.yaml is root-only (0600).
+ssh -i omwa-key.pem ubuntu@<eip>
+
+# 1. add the key to the existing secret WITHOUT rewriting the other two entries.
+#    (piped via stdin + --patch-file so the value never lands in argv or shell history)
+sudo kubectl patch secret omwa-api-secrets --patch-file /tmp/p.yaml && shred -u /tmp/p.yaml
+
+# 2. apply the manifest — the changed pod template triggers the rollout by itself, and
+#    imagePullPolicy: Always pulls the current :latest built by CI from the search commits.
+sudo kubectl apply -f deployment.yaml
+sudo kubectl rollout status deployment/omwa-api
+```
+
+**Verified after rollout:** `/health` → 200, and
+`/search?q=guards demanding bribes` → `mode: "hybrid"`, 2,647 ms cold — with `Company Guard`
+and `Thief` returning at `lexical_rank: null, vector_rank: 1/2`. Semantic-only hits are the
+proof that matters: they cannot be produced by the lexical half, so their presence rules out the
+silent `mode:'lexical'` degradation of cause 2. **Checking `/health` would have proved nothing** —
+it was green throughout both failures.
+
+`OPENAI_API_KEY` is wired with `optional: true` **deliberately**: the search path fails *open*
+(lexical-only) by design, so a hard `secretKeyRef` would put the pod in
+`CreateContainerConfigError` and take the entire API down for a feature built to degrade. Contrast
+`OMWA_INGEST_TOKEN`, which fails *closed* — the write path returns 503 without it.
+
+▶ **Still open (deliberately, not forgotten):** nothing triggers a rollout on a new image. CI
+publishes `:latest`, and a running pod never re-pulls it. Until that is wired, **every API change
+needs a manual `kubectl rollout restart`**, and the failure mode is exactly this one: green
+health checks in front of stale code.

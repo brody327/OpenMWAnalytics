@@ -79,6 +79,21 @@ spec:
                 secretKeyRef:
                   name: omwa-api-secrets
                   key: OMWA_INGEST_TOKEN
+            # Embeddings for the semantic half of GET /search. Unlike OMWA_INGEST_TOKEN above,
+            # the API FAILS OPEN here: search.ts getProvider() logs a warning and serves
+            # lexical-only results. That is the right behaviour for a read path (half a search
+            # beats no search), but it means a missing key produces real, relevant, plausible
+            # results with NO error — so `optional: true` is deliberate and the degradation is
+            # surfaced in the response as mode:'lexical' and rendered as a badge in the UI.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: omwa-api-secrets
+                  key: OPENAI_API_KEY
+                  # Optional so a cluster without the key still schedules; without this the pod
+                  # would sit in CreateContainerConfigError and take the WHOLE api down for a
+                  # feature that is designed to degrade.
+                  optional: true
           # Resource governance. requests = what the scheduler reserves; limits = the hard
           # ceiling. Keeping these small leaves headroom for the k3s control plane on 1 GB.
           resources:
