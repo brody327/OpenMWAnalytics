@@ -109,7 +109,7 @@ ingest authenticated. Remaining threads:
   - ✅ **Really embedded 2026-07-26** (28,253 texts, 152 s, ~$0.026, `text-embedding-3-small@384`),
     and **step 7's `ef_search` curve is measured** (`11 §10a`, `npm run bench-recall`): recall@10
     89.3% at the default 40, **91.6% at 80 — the recommendation** — vs **~30× the cost** for exact
-    KNN. ⚠️ **LOCAL ONLY: prod RDS has no corpus yet** (ingest is local-first by necessity).
+    KNN. ✅ **PROD POPULATED 2026-07-26** — migration 0005 applied via the initContainer, corpus ingested through an SSH tunnel (RDS is private); 34,785 records / 36,567 chunks live on RDS.
   - ⚠️ **This lifts the "blocked on volume" constraint below** — **36,567 chunks** × 384-dim
     vectors is the first genuinely large data the project has had, on a `db.t3.micro`. **MEASURED:
     `shared_buffers` = 185 MB (not the 256 MB assumed); HNSW index 56 MB = 30% of the pool; GIN

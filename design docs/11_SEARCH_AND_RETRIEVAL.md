@@ -368,6 +368,22 @@ to `-1`), so a group-wide 256 MB is a 768 MB ceiling across three workers on a 1
 OOM on RDS restarts Postgres. It is a *ceiling*, not a reservation: nothing is allocated until a
 maintenance operation asks for it.
 
+✅ **MEASURED on prod RDS 2026-07-26 — and the deferral was right.** Building the index over the
+real 36,567-row corpus, pgvector reported exactly what it did:
+
+```
+NOTICE:  hnsw graph no longer fits into maintenance_work_mem after 28368 tuples
+DETAIL:  Building will take significantly more time.
+```
+
+**78% of the graph fit in 64 MB; the whole build still finished in 19.5 s.** So "significantly more
+time" is nineteen seconds, once. Raising the parameter would have traded a real OOM hazard on a
+1 GB instance for a saving of seconds on an operation that runs when the corpus changes. The
+extrapolation, for the record: ~2.3 KB per node ⇒ the full graph wants ~82 MB.
+
+> This is the value of deferring: the tuning question answered itself the moment there was data,
+> and the answer was "don't."
+
 ⚠️ **Also measured:** swapping the local image moved glibc 2.41 → 2.36, so every text btree was
 built under different collation rules than it would now be searched under — silent wrong answers,
 on the database step 7 benchmarks against. Fixed with `REINDEX DATABASE` + `REFRESH COLLATION
@@ -692,7 +708,26 @@ block of HTML-ish markup, and the corpus genuinely contains script comments like
   contain **duplicate text under different records** (the same stock line under two topics), so the
   UI needs to dedupe or group.
 - **Apply `hnsw.ef_search = 80`** at the search endpoint (§10a) — a GUC, not a migration.
-- **Deployment.** ✅ `CREATE EXTENSION vector` is permitted on RDS and lives in migration `0005`
-  (`09 §7`'s initContainer). Ingest stays local by necessity — the `.esm` files cannot leave the
-  machine — so **production's corpus is populated by running ingest against the RDS URL**, which is
-  one env var away from the local run. The CLI prints its target host before doing anything.
+- ✅ **DEPLOYED AND POPULATED 2026-07-26.** Migration `0005` applied via the `09 §7` initContainer
+  on a `kubectl rollout restart` (pgvector 0.8.2 installed, three tables created, 6 migrations
+  recorded). Prod now holds **34,785 records / 36,567 chunks / 2,960 effects**, one embedding model,
+  index sizes identical to local (56 MB HNSW, 6 MB GIN).
+
+  **How, and why it is awkward by design:** ingest must run locally (the `.esm` files cannot leave
+  the machine) but **RDS is not publicly reachable** — its endpoint resolves to a private VPC
+  address. So the run goes through an **SSH tunnel via the EC2 box**:
+
+  ```
+  ssh -i omwa-key.pem -N -L 15432:omwa-db.<id>.us-east-2.rds.amazonaws.com:5432 ubuntu@<eip>
+  DATABASE_SSL=true DATABASE_URL=postgresql://omwa:<pw>@localhost:15432/omwanalytics \
+    npm run ingest-corpus -- <dump> Morrowind.esm
+  ```
+
+  171 s end to end — only ~19 s slower than the local run despite the tunnel. Prod re-embedded from
+  scratch (~$0.026) because its `game_chunks` was empty: correct by construction, not waste.
+
+  ⚠️ **Bulk-load order matters and this was the one free moment to get it right.** The HNSW index
+  was **dropped before the load and rebuilt after** — safe only because the table was empty and
+  nothing queried it yet. Inserting 36,567 vectors into a live HNSW index would have paid graph
+  maintenance per row. Load-then-index is the standard pattern; here it also produced the
+  `maintenance_work_mem` measurement in §7.
