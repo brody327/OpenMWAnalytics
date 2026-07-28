@@ -78,6 +78,27 @@ test('⭐⭐ a real modded load order is REFUSED, and every contaminant is named
   assert.deepEqual(v.contaminants, ['Tamriel_Data.esm', 'RepopulatedMorrowind.ESM']);
 });
 
+test("⭐ the CCFF_Testing_Base profile's real load order passes", () => {
+  // Verbatim from launcher.cfg after wiring the analytics scripts in (2026-07-28). OAAB_Data.esm
+  // is a HARD DEPENDENCY of CCFF (confirmed by the author), so every CCFF player has it and
+  // anything it places is genuinely reachable for them -- it is part of the measured set, not a
+  // contaminant. Pinned as a test so removing it from PERMITTED_EXTRAS fails loudly instead of
+  // silently refusing every real survey.
+  const profile = [
+    'Morrowind.esm',
+    'Tribunal.esm',
+    'Bloodmoon.esm',
+    'OAAB_Data.esm',
+    'The Contrived Case of Flordius Fastus.omwaddon',
+    'The Contrived Case of Flordius Fastus.omwscripts',
+    'omwanalytics.omwscripts',
+    'omwanalytics-survey.omwscripts',
+  ];
+  const v = validateLoadOrder(profile);
+  assert.deepEqual(v.contaminants, []);
+  assert.equal(v.ok, true);
+});
+
 test('a missing expansion is REFUSED (the survey would describe a smaller world)', () => {
   const v = validateLoadOrder(['Morrowind.esm', 'omwanalytics-survey.omwscripts']);
   assert.equal(v.ok, false);

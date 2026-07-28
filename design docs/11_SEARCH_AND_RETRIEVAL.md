@@ -1061,6 +1061,12 @@ wins an override, so a reordered load order describes a *different world*. The a
   every fixture id was already lowercase. Re-run with a genuinely mixed-case corpus id
   (`Potion_Local_Brew_01`, Mazte): **4 vs 3.** The naive join silently drops it.
 
+✅ **The `CCFF_Testing_Base` launcher profile is now wired** (2026-07-28): analytics `data=` path +
+`omwanalytics.omwscripts` + `omwanalytics-survey.omwscripts`. **`OAAB_Data.esm` is a HARD
+DEPENDENCY of CCFF** (confirmed by the author), so it is in `PERMITTED_EXTRAS` rather than behind
+`--allow-extra`: the measured set is *what a player running this mod necessarily has*, and a flag
+you must remember to pass is the rot the refusal exists to prevent. Pinned by a test.
+
 ▶ **NOT YET RUN.** The tables are deliberately EMPTY — fixture rows were removed rather than left
 sitting in a table that would read as data. Producing a real survey needs a **second OpenMW config**
 containing only `Morrowind.esm` + `Tribunal.esm` + `Bloodmoon.esm` + CCFF + the analytics mod.

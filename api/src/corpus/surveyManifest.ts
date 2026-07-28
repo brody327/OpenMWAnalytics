@@ -37,10 +37,20 @@ export interface SurveyManifest {
  */
 export const REQUIRED_FILES = ['morrowind.esm', 'tribunal.esm', 'bloodmoon.esm'] as const;
 
-/** The measured mod + our own scripts. Extended when a different mod is measured. */
+/**
+ * The measured mod, ITS HARD DEPENDENCIES, and our own scripts. Extended when a different mod is
+ * measured.
+ *
+ * ⭐ Why a dependency of the measured mod belongs here rather than behind `--allow-extra`:
+ * "the measured set" is *what a player running this mod necessarily has*. `OAAB_Data.esm` is a
+ * required dependency of CCFF (confirmed by the author 2026-07-28), so every CCFF player has it and
+ * anything it places IS reachable for them. Putting it behind a per-run flag would mean the honest
+ * answer depended on remembering to pass an argument -- the same rot the refusal exists to prevent.
+ */
 export const PERMITTED_EXTRAS = [
   'the contrived case of flordius fastus.omwaddon',
   'the contrived case of flordius fastus.omwscripts',
+  'oaab_data.esm', // hard dependency of CCFF -- see above
   'omwanalytics.omwscripts',
   'omwanalytics-survey.omwscripts',
 ] as const;

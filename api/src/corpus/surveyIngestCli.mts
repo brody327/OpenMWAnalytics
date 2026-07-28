@@ -2,7 +2,7 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { parseSurveyManifest, validateLoadOrder } from './surveyManifest.js';
+import { parseSurveyManifest, validateLoadOrder, PERMITTED_EXTRAS } from './surveyManifest.js';
 
 // npm run ingest-survey -- <openmw.log> [--allow-extra <file>]...
 //
@@ -45,12 +45,12 @@ const manifest = parseSurveyManifest(fs.readFileSync(logPath, 'utf8'));
 console.log(`[survey] load order: ${manifest.loadOrder.length} files, hash ${manifest.loadOrderHash}`);
 console.log(`[survey] cells scanned: ${manifest.cellsScanned}, placements: ${manifest.placements.length}`);
 
+// One source of truth: PERMITTED_EXTRAS, plus whatever this run explicitly allows. Re-listing the
+// defaults here would let the two copies drift, and the copy that silently won would decide what
+// counts as contamination.
 const verdict = validateLoadOrder(manifest.loadOrder, [
+  ...PERMITTED_EXTRAS,
   ...allowExtra.map((f) => f.toLowerCase()),
-  'the contrived case of flordius fastus.omwaddon',
-  'the contrived case of flordius fastus.omwscripts',
-  'omwanalytics.omwscripts',
-  'omwanalytics-survey.omwscripts',
 ]);
 
 if (!verdict.ok) {
