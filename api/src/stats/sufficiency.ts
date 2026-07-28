@@ -152,10 +152,29 @@ export async function sufficiency(_req: Request, res: Response): Promise<void> {
       group by 1, 2, 3, 4
     ),
     remedies as (
-      select affected, affected_kind, magnitude_min, magnitude_max
-      from record_effects
-      where effect_name ilike 'fortify%'
-        and affected is not null
+      select e.affected, e.affected_kind, e.magnitude_min, e.magnitude_max
+      from record_effects e
+      join game_records r on r.record_id = e.record_id
+      where e.effect_name ilike 'fortify%'
+        and e.affected is not null
+        -- ⚠️ A permanent (duration 0) SPEL is an innate ABILITY -- Gaenor's Abilities (+500 Luck),
+        -- Her Hand (+100 Marksman), Divine Abilities (+100 Strength). They are attached to NPCs and
+        -- factions and no player can ever hold one, so counting them invents remedies. They bite
+        -- hardest exactly where the verdict matters most: their magnitudes are 70-500, so they only
+        -- ever satisfy LARGE gaps -- the gates most likely to genuinely have no answer.
+        --
+        -- ⭐ SCOPED TO SPEL ON PURPOSE. The same duration = 0 on an ENCH is a CONSTANT-EFFECT
+        -- enchantment, which is always-on *while worn* and is a perfectly real, obtainable remedy:
+        -- Moon-and-Star (+5 Personality), Sheogorath's Seal (+10), Boots of Blinding Speed, and
+        -- CCFF_lelene_ring_en -- a Personality ring authored by the very mod being measured. An
+        -- unscoped duration filter would delete a mod author's own remedy on their own gate.
+        --
+        -- This is a PROXY and not the real discriminator. esmtool emits a SPEL Type field
+        -- (Spell/Ability/Power/Blight/Disease/Curse) and parseEsmDump.ts DISCARDS it -- 0 of 1,067
+        -- SPEL rows carry it -- so the corpus structurally cannot say "can a player cast this".
+        -- Parsing it is the real fix, and would also correctly KEEP Powers (once-a-day but genuinely
+        -- player-usable), which this filter retains only by accident of their having durations.
+        and not (r.type = 'SPEL' and e.duration = 0)
     )
     select
       g.check_id, g.stat, g.stat_kind, g.threshold, g.fails,

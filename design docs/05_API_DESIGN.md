@@ -413,3 +413,39 @@ asserts a magnitude we lack.** They are carried separately and can never change 
 - ⚠️ **A seeder artefact is visible in the current data:** `security` `gap_p90` sticks at 30 while
   `threshold` climbs 40 → 50 → 60 → 100. Real players facing a 100 bar would show enormous gaps;
   the generator is drawing `skill_value` as `threshold − U(0,~30)`.
+
+### ⚠️ Defect found IN PROD minutes after the first deploy (2026-07-28) — innate abilities
+
+The first deploy served `reliable: 1` on a `luck` gate at a **gap of 70**. The remedy it had found
+was **`Gaenor's Abilities`** — magnitude 500, `duration: 0`, an *innate ability* bolted to a
+scripted NPC. No player can ever hold it. The gate has no remedy; the endpoint invented one.
+
+**56 of 717 Fortify effects are permanent abilities** (51 SPEL + 5 ENCH): `Her Hand` (+100
+Marksman), `Divine Abilities` (+100 Strength). Their magnitudes run **70–500**, so they are only
+ever counted against **large gaps** — the gates most likely to genuinely have no answer, and where
+a fabricated remedy does the most damage.
+
+⭐ **Why every check passed anyway.** tsc, 58 tests, the mutation check, and the endpoint probe
+(`gamble_only` present alongside `no_remedy`) all went green. Each verified that *the pipeline
+computes what it was told to compute*. **None asked whether the rows meant what the query assumed** —
+`type = 'SPEL'` was read as "a spell a player can cast". Same shape as the test-fixture incident:
+conservation checks living inside a stage, with nothing verifying the stage BOUNDARY.
+
+**Fix: exclude `type = 'SPEL' AND duration = 0`, scoped to SPEL — NOT a global duration filter.**
+
+⚠️ **The scoping is load-bearing, and a global filter was the tempting wrong answer.** A permanent
+*enchantment* is a **constant-effect** item — always-on *while worn* — and is a perfectly real,
+obtainable remedy. The five: Moon-and-Star (+5 Personality/+5 Speechcraft), Sheogorath's Seal
+(+10 Personality), Boots of Blinding Speed, and **`CCFF_lelene_ring_en` — a Personality ring
+authored by the very mod being measured.** An unscoped `duration <> 0` would have deleted a mod
+author's own remedy, on their own Personality gate, in the mod under analysis.
+
+**This filter is a PROXY and the real fix is still open.** esmtool emits a SPEL Type field
+(Spell / Ability / Power / Blight / Disease / Curse) and `parseEsmDump.ts` **discards it** — 0 of
+1,067 SPEL rows carry it — so the corpus structurally cannot answer *"can a player cast this"*.
+Parsing it would also correctly KEEP **Powers** (once-a-day, but genuinely player-usable), which
+this filter retains only by the accident of their having durations. ▶ Belongs with `11 §13`.
+
+**Verified:** Gaenor drops out at gaps ≥30 while all three constant-effect Personality enchantments
+survive. The filter is a **no-op on local data** — the seeder caps gaps near 30 and abilities start
+at 70 — so the discriminating check is prod's `luck` gate at gap 70 going `reliable: 1 → 0`.
