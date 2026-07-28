@@ -458,7 +458,29 @@ check they previously couldn't."* It fails silently in at least four ways —
 
 ## `SkillCheckDisplayed`
 
-**Status:** 🔵 **designed 2026-07-27, NOT implemented.** Third-party (CCFF).
+**Status:** ✅ **VERIFIED LIVE IN PROD 2026-07-28.** Third-party (CCFF).
+⚠️ **The emitting code is still UNCOMMITTED in the CCFF working tree** (0 occurrences of
+`emitChecksDisplayed` in `HEAD`). It works and is one `git checkout` from being lost.
+
+**First real rows, same play session** — the panel flipping under a buff, on one check:
+
+| # | event | payload |
+| --- | --- | --- |
+| 1 | `SkillCheckDisplayed` grp 4 | `ccff_attic_vent_in:open`, `threshold_met: false` |
+| 2 | `ItemConsumed` | `potion_skooma_01` |
+| 3 | `SkillCheckDisplayed` grp 5 | same check, `threshold_met: true` |
+| 4 | `SkillCheckResolved` | `base_value 20`, `stat_modifier +20`, `skill_value 40`, `threshold 40`, **passed** |
+
+⭐ **A controlled pair arrived on the same check, same character** — `stat_modifier 0` ⇒ value 20 vs
+threshold 40 ⇒ **failed**; `stat_modifier +20` ⇒ value 40 ⇒ **passed**. The only varying term is the
+boost, so causation is structural rather than inferred. *(A temporal-window join — the approach
+considered and rejected — could not have distinguished this from a healing potion drunk nearby.)*
+
+⚠️ **`display_group` IS NOT DENSE — the observed run went 1, 3, 4, 5.** The counter increments once
+per real panel open, but events emit only for actions that are *checks*, so a panel containing no
+check silently consumes a number. **The read side must never infer "panels seen" from
+`max(display_group)` or from counting distinct values** — it can only group checks shown together.
+
 ✅ **FEASIBILITY GATE CLOSED 2026-07-27 — the full 2×2 IS buildable, from the PLAYER context only.**
 
 ⭐ **The deciding finding: the panel renderer already computes threshold-met at display time**, for
@@ -529,11 +551,11 @@ feeds a conversation about reallocating a writer's time, inflating it is the exp
 
 ## `ItemConsumed`
 
-**Status:** 🟡 **implemented 2026-07-27 (`b59eaa5`), NEVER FIRED — 0 events received.** The
-`onConsume` handler exists in `mod/scripts/omwanalytics/player.lua`; it has simply never been
-exercised in-game, so the seam is unproven. ⚠️ *Do not read "implemented" as "working"* — the
-`ItemUsage` trap below is exactly the kind of failure that looks fine until a real play session
-produces fewer rows than expected. **First-party** — emitted by our own platform PLAYER script
+**Status:** ✅ **VERIFIED LIVE IN PROD 2026-07-28** (`b59eaa5`). First real row:
+`{"item_id":"potion_skooma_01","item_type":"potion"}`, drunk between two `SkillCheckDisplayed`
+events that flipped `threshold_met` false → true on the same gate. **The `onConsume` seam fired
+from ordinary play**, which is what the `ItemUsage` analysis below predicted and what no amount of
+code review could have established. **First-party** — emitted by our own platform PLAYER script
 (`mod/scripts/omwanalytics/player.lua`), `mod_id = 'base'`.
 
 **Questions it answers:** `10` **Q3.5** (do players reach for consumables to clear a stat gate) and
