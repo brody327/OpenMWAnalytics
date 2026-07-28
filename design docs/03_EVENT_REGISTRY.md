@@ -529,7 +529,11 @@ feeds a conversation about reallocating a writer's time, inflating it is the exp
 
 ## `ItemConsumed`
 
-**Status:** 🔵 designed 2026-07-27. **First-party** — emitted by our own platform PLAYER script
+**Status:** 🟡 **implemented 2026-07-27 (`b59eaa5`), NEVER FIRED — 0 events received.** The
+`onConsume` handler exists in `mod/scripts/omwanalytics/player.lua`; it has simply never been
+exercised in-game, so the seam is unproven. ⚠️ *Do not read "implemented" as "working"* — the
+`ItemUsage` trap below is exactly the kind of failure that looks fine until a real play session
+produces fewer rows than expected. **First-party** — emitted by our own platform PLAYER script
 (`mod/scripts/omwanalytics/player.lua`), `mod_id = 'base'`.
 
 **Questions it answers:** `10` **Q3.5** (do players reach for consumables to clear a stat gate) and
