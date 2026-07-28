@@ -1824,3 +1824,114 @@ The data layer is **complete and verified**: `ItemConsumed` + `SkillCheckDisplay
    Generated prose has none. **Decide the independent check before writing the prompt.** What
    observation would be impossible if the insight were wrong? If there is no answer, the feature is
    not ready to build.
+
+---
+
+## 2026-07-27 (part 4) — the corpus session, and two learner corrections that changed the design
+
+Ran after the freshness work, learner driving. Two of their objections **invalidated design I had
+already written**, which is the pattern worth noting: neither was a knowledge gap being filled, both
+were judgment calls the mentor had got wrong.
+
+### ⭐ Correction 1 — corpus scope. The mentor over-claimed twice.
+
+I argued the corpus was broken because it held only `Morrowind.esm` while the game loads 12+ files:
+*"11,553 cells vs ~3,900, two-thirds of the world is missing."* The learner:
+
+> *"This is a website measuring specific mods — not my entire load order. Base game and its
+> expansions are a stable base that will always be there; my load order is not stable."*
+
+Decisive, and it redefined the product boundary: **the corpus describes the stable base every author
+shares, plus the ONE mod being measured.** Measured after the pushback — the real gap was **397
+cells and 8 potions**, not two-thirds. The other ~8,600 cells were one person's mods and belonged
+nowhere near a shared corpus.
+
+⚠️ **This was the SECOND time in one day I reached for a load-order explanation and was wrong.** The
+first was Skooma (actually the test fixture); `potion_skooma_01` is defined only in `Morrowind.esm`,
+with no expansion override. A hypothesis that explained one bug got re-used on a second where it did
+not apply.
+
+⭐ It also exposed a real flaw in my own survey design: **Lua cannot report an object's provenance**,
+so a placement survey run on the author's normal setup would silently bake their personal mods into
+a shared corpus — the fixture bug's shape again. The survey therefore has to be a **build step
+against a controlled load order**, not a capture of a play session.
+
+### ⭐ Correction 2 — where the LLM actually earns its keep
+
+Given six candidate "insights" from another agent, the learner's own summary was sharper than mine:
+
+> *"The LLM earns its keep only at the specific point where the comparison is against something
+> written in prose, or where the interesting question is 'is this meaningful' rather than 'what is
+> the number.'"*
+
+That is the criterion 4c needed. All six candidates were **SQL joins** — good analytics, and
+evidence that the *heuristic* layer has plenty left, which makes the case for a model **weaker**,
+not stronger. Recorded as the interview-strong version: *"I enumerated the insights I wanted, found
+they were all joins, built them as queries, and here is the residue that needed generation."*
+
+The learner then extended it unprompted to **setting** — using skill/attribute/place to *recommend*
+an item — which is the first argument for using all three layers where each is uniquely good:
+relational for *what mechanically works*, vector for *what fits this place*, LLM for *is this
+meaningful*. It retroactively justifies the HNSW index, which until then served only a search box.
+
+### The decision the learner made, and the reasoning check
+
+**PK stays `record_id`; `source` means "the file that won".** Rejected `(source, record_id)` because
+this is a **search index** — two rows per object lets a query return the superseded version, ranked
+by relevance, with nothing marking it stale.
+
+Prediction question — *"under ordered merge, what happens to the chunks of a record that got
+shorter?"* Learner: *"they'd stay because we wouldn't allow for dups?"* — **half right, and the right
+half was the non-obvious one.** Deterministic chunk ids (`recordId#N`) do prevent duplication. But
+the tail chunks `#3–#5` are orphans the FK cascade cannot catch, and they survive or not depending
+on an **ordering detail nothing documented**: the record upsert runs BEFORE the orphan sweep, which
+flips `source` first and pulls the stale chunks into the sweep's scope. Correct today by
+coincidence; now written down.
+
+### ⭐⭐ The evening's headline finding: CODE DEPLOYS DO NOT MIGRATE DATA
+
+Merging into prod, Morrowind wrote **7** chunks locally and **2,050** against prod. Cause: prod's
+chunks predated commit `3bfd63f` ("embed what an item DOES, not just its name"), which changed
+`chunk.ts`. **The code shipped and deployed; the data it was meant to fix never moved.** Prod served
+the exact bug that commit fixed for a full day, healthy and green.
+
+> A derived artefact is not migrated by deploying the code that derives it. Chunk text is a function
+> of `chunk.ts`; changing that function invalidates every stored chunk — and the idempotency key
+> (`text_hash + model + dims`) **cannot** notice, because the hash of the NEW text is a value that
+> was never stored.
+
+Same shape as `11 §8`'s model-swap trap one layer up — except there the guard existed and fired
+live, and here nothing was watching. ▶ `verify-corpus` still does not compare **chunk text**; that
+is the open gap.
+
+### Also: `verify-corpus` caught itself
+
+Built that morning to detect silent corruption, it reported **3,189 false discrepancies** after the
+merge — per-source reconciliation treating every overridden record as missing. It was wrong for
+exactly one run and took minutes rather than a day **because it fails loudly**. The non-zero exit
+justified itself on its own author.
+
+### ⚠️ Verified rather than assumed — 5,681 overrides
+
+Far more than the ~397 predicted, and *2,719 base dialogue records changing owner looks identical to
+a silent id collision destroying content*. Checked: a sampled `INFO` record is **byte-identical**
+across `Morrowind.esm` and `Tribunal.esm` — same id, prev/next, text, actor, script. Expansions
+re-serialise the dialogue topics they touch. **The check that could have failed was run.**
+
+---
+
+## ▶ OPENING RECALL CHECK FOR 2026-07-28 — 5 questions, list fixed
+
+Sized to a very long session and weighted toward what tomorrow's work *builds on*. Assessment debt
+from part 3 is still open, but these come first. **Prediction / explain-back / transfer — never MC.**
+
+| # | concept | why this one | form |
+| --- | --- | --- | --- |
+| 1 | **code deploys do not migrate data** | the evening's headline, and the class is not closed — chunk text is still unverified | transfer: *"where else in this platform could a derived artefact silently drift from its generator?"* |
+| 2 | why `(source, record_id)` was **rejected** | the decision tomorrow's queries sit on; the reason is specific to a search index | explain-back |
+| 3 | why single-plugin ingest is **refused, not warned** | a destructive default that reports nothing — the day's whole theme in one flag | prediction: *"what exactly happens if I run Morrowind.esm alone?"* |
+| 4 | what the corpus **cannot** answer about an item | ⭐ **directly gates tomorrow's Q3.6 query.** Getting this wrong produces a confident, fabricated recommendation | judgment: *"a mod author asks 'can players get this potion early?' — what can we say?"* |
+| 5 | **pick a check that cannot pass under the failure you fear** | the session's transferable method, applied ~6 times | transfer to a NEW system, e.g. *"how would you prove a cache is actually being used?"* |
+
+▶ **Then** the Q3.6 mechanical-sufficiency SQL — pure heuristic, no model. That measurement IS the
+"why not just a heuristic" answer, and per the 4c plan it must exist before anything generative.
