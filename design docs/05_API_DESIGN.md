@@ -404,10 +404,19 @@ asserts a magnitude we lack.** They are carried separately and can never change 
 
 ### ⚠️ Known limitations — biasing the result, not hidden
 
-- **`base_value` is emitted by nothing** (0 of 329,964 rows), though `03` designed it 2026-07-27.
-  `skill_value` is the **modified** value, so a player who already drank a potion shows a smaller
-  gap than their build has ⇒ **every gap here is biased low**, and remedies therefore look *more*
-  sufficient than they are. This is the same caveat `10` already records against Q3.5/Q3.6.
+- **`base_value` is absent from all 329,964 rows — but NOT because nothing emits it.** ⚠️ *(This
+  bullet originally said "emitted by nothing"; that was wrong and is corrected here.)* The full
+  chain is **built and committed in CCFF**: `inspect_panel.lua:871` reads `.base`/`.modifier`/
+  `.damage` on the PLAYER (where attributes are readable), ships them as `statDetail` via
+  `CCFF_InspectActionFired`, and `evidence_inspect.lua:2309-2314` writes them onto the event. The
+  rows are empty because **the seeder does not produce the field and every real row predates the
+  code** — *code deploys do not migrate data*, a third instance in one day.
+  ⭐ **And unlike the chunk case, these CANNOT be back-filled.** A past check's `base_value` is not
+  derivable from anything stored; re-running ingest repaired the chunks, nothing can repair these.
+  The fix is a **play session**, not a build.
+  Meanwhile `skill_value` is the **modified** value, so a player who already drank a potion shows a
+  smaller gap than their build has ⇒ **every gap here is biased low**, and remedies therefore look
+  *more* sufficient than they are. Same caveat `10` records against Q3.5/Q3.6.
 - **No `env` filter**, matching every other `/stats` endpoint. Seeded rows carry `env='synthetic'`
   and currently dominate (329,932 of 329,964), so treat magnitudes as **shape, not finding**.
 - ⚠️ **A seeder artefact is visible in the current data:** `security` `gap_p90` sticks at 30 while

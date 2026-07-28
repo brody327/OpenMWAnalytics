@@ -58,10 +58,15 @@ import { db } from '../db/client.js';
 // are damaged. Revisit when the 03 additive fields actually ship.
 //
 // ⚠️ KNOWN LIMITATIONS, all of which bias the RESULT and none of which are hidden:
-//  - `base_value` is designed (03, 2026-07-27) but emitted by NOTHING. `skill_value` is the
-//    MODIFIED value, so a player who already drank a potion shows a smaller gap than their build
-//    has ⇒ every gap here is biased LOW by an unknown amount, and remedies look more sufficient
-//    than they are.
+//  - `base_value` is absent from all 329,964 rows -- but NOT because nothing emits it. The chain is
+//    BUILT and committed in CCFF (inspect_panel.lua:871 reads .base/.modifier/.damage on the
+//    PLAYER, ships them as statDetail, evidence_inspect.lua:2309 writes them onto the event). The
+//    rows are empty because the seeder omits the field and every real row PREDATES the code --
+//    code deploys do not migrate data. ⭐ Unlike the corpus chunks these can never be back-filled:
+//    a past check's base_value is not derivable from anything stored. The fix is a PLAY SESSION.
+//    Until then `skill_value` is the MODIFIED value, so a player who already drank a potion shows a
+//    smaller gap than their build has ⇒ every gap here is biased LOW, and remedies look more
+//    sufficient than they are.
 //  - No `env` filter, matching every other /stats endpoint. Seeded rows carry env='synthetic'
 //    (see the synthetic-data policy) and currently dominate, so treat magnitudes as shape.
 
