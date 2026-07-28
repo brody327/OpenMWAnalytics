@@ -94,6 +94,7 @@ export function hashLoadOrder(loadOrder: string[]): string {
  */
 export function parseSurveyManifest(text: string): SurveyManifest {
   let loadOrder: string[] | null = null;
+  let sawHeader = false;
   let cellsScanned = 0;
   let footerRows: number | null = null;
   const placements: Placement[] = [];
@@ -113,11 +114,12 @@ export function parseSurveyManifest(text: string): SurveyManifest {
       case 'begin':
         // A second 'begin' means two survey runs are interleaved in one log. Merging them would
         // silently double every count in the overlap.
-        if (loadOrder !== null || placements.length > 0) {
+        if (sawHeader || placements.length > 0) {
           throw new Error('survey: a second run starts in this log -- refusing to merge two surveys');
         }
         break;
       case 'header':
+        sawHeader = true;
         loadOrder = (obj.load_order as string[]) ?? null;
         cellsScanned = Number(obj.cells_scanned ?? 0);
         break;
@@ -137,7 +139,19 @@ export function parseSurveyManifest(text: string): SurveyManifest {
     }
   }
 
-  if (loadOrder === null) throw new Error('survey: no header found -- log truncated before the survey finished?');
+  // Distinguish "no header at all" from "header present but the load order is missing". The first
+  // real run hit the second case and got told the first, which sent the diagnosis in the wrong
+  // direction: the manifest was complete, the guard field was not.
+  if (!sawHeader) {
+    throw new Error('survey: no header record found -- log truncated before the survey finished?');
+  }
+  if (loadOrder === null || loadOrder.length === 0) {
+    throw new Error(
+      'survey: the header carries NO LOAD ORDER, so this survey cannot be shown to describe the ' +
+        'controlled world -- refusing. (Known cause: core.contentFiles.list is engine userdata and ' +
+        'must be copied into a plain table before json.encode; see survey.lua readLoadOrder.)',
+    );
+  }
   if (footerRows === null) {
     throw new Error(
       'survey: no footer found -- the survey did not complete, or openmw.log was truncated. ' +

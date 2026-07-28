@@ -125,6 +125,30 @@ local function emit(line)
     print(SENTINEL .. ' ' .. line)
 end
 
+-- ⚠️ `core.contentFiles.list` is ENGINE-BACKED USERDATA, not a plain Lua table.
+--
+-- json.lua encodes nil/boolean/number/string/table and returns 'null' for everything else, so on
+-- the first real run (2026-07-28) the load order -- the ONE field the entire contamination guard
+-- rests on -- serialised as `null`. Everything else about that run looked perfect: header present,
+-- footer present, 2,912 cells, 6,797 rows reconciling exactly. Only the guard was empty.
+--
+-- It failed CLOSED (ingest refused, 0 rows written), which is the design working. But the lesson is
+-- the day's own: a check is only worth what it can detect, and "the value is absent" and "I could
+-- not represent this value" had been collapsed into the same output.
+--
+-- Copy into a real array. Returns nil (never an empty array) when the list cannot be read, so the
+-- two cases stay distinguishable downstream.
+local function readLoadOrder()
+    local out = {}
+    local ok = pcall(function()
+        for _, name in ipairs(core.contentFiles.list) do
+            out[#out + 1] = tostring(name)
+        end
+    end)
+    if not ok or #out == 0 then return nil end
+    return out
+end
+
 local function finish()
     finished = true
 
@@ -132,10 +156,19 @@ local function finish()
     -- contaminated manifest, because "what world does this describe" must be answerable from the
     -- data alone rather than from whoever remembers how it was produced. It is also the STALENESS
     -- detector: the world changes when the load order does.
+    local loadOrder = readLoadOrder()
+    if not loadOrder then
+        -- Loud, and in plain text so it is readable without the extractor. The header still goes
+        -- out with a null load order so the ingest refuses explicitly rather than the manifest
+        -- simply looking truncated.
+        print('[OMWA survey] FATAL: could not read core.contentFiles.list -- the load order cannot '
+            .. 'be recorded, so this survey CANNOT be trusted and will be refused at ingest.')
+    end
+
     emit(json.encode({
-        kind         = 'header',
-        version      = 1,
-        load_order   = core.contentFiles.list,
+        kind          = 'header',
+        version       = 1,
+        load_order    = loadOrder,
         cells_scanned = scanned,
     }))
 

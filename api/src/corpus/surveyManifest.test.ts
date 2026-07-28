@@ -43,6 +43,31 @@ test('⭐ conservation check: a truncated manifest is REFUSED, not silently inge
   assert.throws(() => parseSurveyManifest(truncated), /conservation check FAILED.*9.*parsed 2/s);
 });
 
+test('⭐⭐ a header with a NULL load order is REFUSED — the real 2026-07-28 failure', () => {
+  // Verbatim shape of the first real survey run. Everything reconciled -- 2,912 cells, header AND
+  // footer present, row count exact -- and the ONE field the contamination guard rests on was null,
+  // because core.contentFiles.list is engine userdata and json.lua returned 'null' for it.
+  //
+  // It failed closed, which is the design working. This test pins that, and pins that the error
+  // NAMES the cause: the first run reported "no header found" when the header was right there,
+  // which pointed the diagnosis at truncation instead of at serialisation.
+  const real = [
+    S + JSON.stringify({ kind: 'begin', cells: 2912 }),
+    S + JSON.stringify({ kind: 'header', cells_scanned: 2912, version: 1, load_order: null }),
+    S + JSON.stringify({ kind: 'placement', ...P[0]! }),
+    S + JSON.stringify({ kind: 'footer', cells_scanned: 2912, rows: 1 }),
+  ].join('\n');
+
+  assert.throws(() => parseSurveyManifest(real), /NO LOAD ORDER/);
+  // and specifically NOT the misleading message
+  assert.throws(() => parseSurveyManifest(real), (e: Error) => !/no header record found/.test(e.message));
+});
+
+test('an EMPTY load order is refused too (not just null)', () => {
+  const empty = manifest([P[0]!], { loadOrder: [] });
+  assert.throws(() => parseSurveyManifest(empty), /NO LOAD ORDER/);
+});
+
 test('a manifest with no footer is REFUSED (survey never finished)', () => {
   const noFooter = manifest(P).split('\n').filter((l) => !l.includes('"footer"')).join('\n');
   assert.throws(() => parseSurveyManifest(noFooter), /did not complete/);

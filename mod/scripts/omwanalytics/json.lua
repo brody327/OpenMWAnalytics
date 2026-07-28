@@ -47,7 +47,17 @@ encode = function(v)
             return '{' .. table.concat(parts, ',') .. '}'
         end
     end
-    return 'null'
+    -- ⚠️ ANYTHING ELSE -- userdata, function, thread. This used to return 'null', which collapsed
+    -- "I cannot represent this value" into "this value is absent". They are NOT the same thing, and
+    -- on 2026-07-28 that cost a world survey: `core.contentFiles.list` is engine-backed USERDATA,
+    -- so the load order (the field an entire contamination guard rested on) serialised as `null`
+    -- while every other part of the manifest looked perfect.
+    --
+    -- Emitting a visible marker instead keeps the JSON valid -- so this can never break the emit
+    -- path -- while making the failure impossible to mistake for a missing field, in the log and in
+    -- the database alike. OpenMW's Lua API returns userdata for many list/handle types, so this is a
+    -- standing hazard, not a one-off.
+    return '"<unencodable:' .. t .. '>"'
 end
 
 return { encode = encode }
