@@ -1935,3 +1935,43 @@ from part 3 is still open, but these come first. **Prediction / explain-back / t
 
 ▶ **Then** the Q3.6 mechanical-sufficiency SQL — pure heuristic, no model. That measurement IS the
 "why not just a heuristic" answer, and per the 4c plan it must exist before anything generative.
+
+### ✅ RESULT — run 2026-07-28. **A LOW ROUND, AND A USEFUL ONE.**
+
+| # | concept | result | what was said |
+| --- | --- | --- | --- |
+| 1 | code deploys don't migrate data | ✗ | named shipper→Postgres drift — a *sync* gap, which self-heals on the next batch. Missed the class: an artefact **derived** by code, stored, never re-derived. |
+| 2 | why `(source, record_id)` was rejected | ◐ | described the orphan-tail-chunk hazard (real, and correctly recalled) but not the reason: **this is a search index**, so a second row is a stale version that can be *ranked and returned* with nothing marking it dead. |
+| 3 | refuse vs. warn | ◐ | had the motive ("counteract that same issue"), not the mechanism (5,681 records silently reverted, exit 0) nor the refuse-vs-warn rationale. |
+| 4 | what the corpus **cannot** answer | ✗✗ | ⚠️ **fell into the named trap, near-verbatim** — proposed "look at where the player is and what's around them" (no placement data exists in any of the 3 tables) and then *"early is nebulous… that being nebulous is kind of the point of using an LLM."* |
+| 5 | a check that can't pass under the failure | ✗ | *"If the cache exists, then the cache exists."* Then, after re-teach, **doubled down on `/health`** — the very endpoint used as the counterexample. |
+
+⭐ **DIAGNOSIS: #4 and #5 are ONE gap, not two.** Both accept a check/claim that the feared failure
+would satisfy equally well. This is also exactly why `/health` was green through both silent deploy
+failures — the learner reproduced the platform's own historical bug from first principles.
+
+**Re-teach that worked (3rd representation, after prose and after the code):** showed `/health` in
+full (`res.json({ ok: true })`, one line, touches nothing), ran it through both worlds — identical
+output ⇒ zero information. Then a **physical analogy**: suspecting the office copier is broken and
+the manager is secretly walking to the print shop — "is it plugged in, warm, green?" passes in both
+worlds; **timing the copy against the 20-minute walk cannot.** Then back to our own numbers:
+*"novel 2,640 ms / repeat 9 ms — in the broken world, is 9 ms possible?"* → **"No… that suggests it
+didn't make the round trip at all."** ✅ Landed. Prose and code both failed; the analogy + a floor
+argument on their own measurement worked.
+
+**Rule now stated in the form to keep:** *don't ask "does the check pass?" — ask "**would this check
+also pass if the thing were broken?**" If yes, discard it and find an observation the failure is
+structurally incapable of producing.* (`/health` ✗ · 9 ms ✓ · `lexical_rank:null` ✓ · byte-identical
+INFO ✓ · asserting the plan says `hnsw` ✓.)
+
+⚠️ **CONSEQUENCE FOR 4c, non-negotiable:** #4's miss means the guardrail cannot live in human review
+— a fabricated reachability claim renders in the same font and register as a computed one and has
+**no tell**. It must be structural: **every claim traces to a field in the query result; anything the
+corpus cannot establish renders `UNKNOWN`.** Taught the split that #4 collapsed — *nebulous JUDGMENT
+over known facts* (✅ the model's job: "is 15 points on a 25-point gap meaningful?") vs *nebulous
+FACT* (❌ nobody's: "can players get this early?" — a missing number is not an invitation).
+
+▶ **RE-TEACH LIST (carry forward, not closed):** #1 (derived-artefact drift — retest on the friction
+rollup, not on chunks), #2 (search-index reason), #3 (mechanism + refuse-vs-warn). #5 landed on the
+3rd try ⇒ **retest cold next session**, different system again. #4 to be re-assessed *in the build*
+by making the learner say what the query can't support.

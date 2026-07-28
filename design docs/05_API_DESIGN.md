@@ -320,3 +320,96 @@ have missed the six-day outage exactly as completely as no checker at all.
   pipeline is fine"* — the one lie that would defeat the whole mechanism.
 - `install_id` is validated as a UUID (400 otherwise); `COALESCE` on update means a heartbeat that
   omits a field cannot **erase** a known one.
+
+---
+
+## `GET /stats/sufficiency` — Q3.6 mechanical sufficiency (added 2026-07-28)
+
+Open, like the rest of `/stats/*`. Implemented in `api/src/stats/sufficiency.ts`; the judgement is
+a pure `classifyGate()` split out from the handler, exactly as `ranking.ts` splits `rankTopics` —
+a DB-free function is the part worth testing and showing.
+
+**The only `/stats` route that leaves the telemetry database.** Every other view is a `GROUP BY`
+over events and can only say *players are failing here*. This one joins what players **did**
+(`SkillCheckResolved`) to what the game **contains** (`record_effects`, `11`), so it can say
+whether the failure is even remediable — a gate with no remedy in the content is an authoring gap,
+not a tuning one.
+
+⭐ **Pure SQL, no model, deliberately.** Per the 4c plan this measurement must exist *before*
+anything generative, because it **is** the "why not just a heuristic" answer. The question here is
+*what is the number*, not *is this meaningful*, and a model adds nothing to the former.
+
+### Response shape
+
+One row per `check_id` + `threshold` — the grain a mod author actually acts on, since the remedy
+you would author depends on the specific gate and its bar (per-`skill` would say "the game has
+Personality potions", which is true of every Personality gate and therefore decides nothing).
+
+| field | meaning |
+| --- | --- |
+| `gap_p50` / `gap_p90` | `threshold − skill_value` over **failed `inspect`** checks |
+| `reliable` | Fortify effects with `magnitude_min >= gap_p90` — *"works every time"* |
+| `possible` | Fortify effects with `magnitude_max >= gap_p90` — *"works on a good roll"* |
+| `unknown_magnitude` | effects on the stat whose magnitude is **absent from the dump** (INGR) |
+| `verdict` | `no_remedy` \| `gamble_only` \| `remedy_exists` |
+| `reachable` | ⚠️ **always the literal `'UNKNOWN'`** — see below |
+
+### ⚠️ The boundary this endpoint may not cross
+
+It reports **mechanical** sufficiency — does an item exist whose magnitude covers the gap. It
+cannot report **reachability**, because the corpus has no placement, value, vendor or leveled-list
+data at all (`11 §13`). `reachable` is therefore emitted as `'UNKNOWN'` on every row and is **never
+omitted**: absence must be *visible*, because this is the single place a downstream LLM would
+fabricate most convincingly (*"sold by most apothecaries"*) — fluent, plausible, probably even true
+of the real game, unverifiable from our data, and **indistinguishable from a computed fact**. Every
+other failure this project has hit had a tell; that one has none.
+
+### Why three tiers rather than one number
+
+Collapsing them forces a lie in one direction, and the two lies point opposite ways:
+
+| observed | `reliable` alone says | `possible` alone says | the truth |
+| --- | --- | --- | --- |
+| 0 reliable, 1 possible | "no remedy" → author content | "a remedy exists" → signpost it | passable **only by re-rolling** |
+
+⭐ **Found on the first real run:** `security @ 25` returns `0 / 1`, because the only Fortify
+Security effect in the entire corpus that reaches a 25-point gap is `Wild Fortify Security Skill`,
+which rolls **5–30**. Everything else caps at 20, and there is **no ALCH remedy for Security at
+all** — the base game has no Fortify Security potion. `shortblade @ 25` returns `0 / 0`: nothing in
+the corpus closes it, which is the unambiguous *author-or-retune* verdict.
+
+`unknown_magnitude` exists for the same reason: INGR effects print no magnitude, so those items
+affect the stat by an amount we do not have. **Dropping them deletes evidence; counting them
+asserts a magnitude we lack.** They are carried separately and can never change a verdict.
+
+### Decisions behind the numbers
+
+- **`max` is the headline predicate, not `min`.** Morrowind rolls a random magnitude in `[min,max]`
+  on every use, so *"this gives you a shot"* is the game's own idiom — reporting only guarantees
+  would describe a game this isn't. It also errs in the cheap direction: an undercount says *the
+  content has no answer* and buys a weekend of authoring, while an overcount says *the answer
+  exists, players aren't finding it* and buys an hour of hint dialogue.
+- **p90, not `max(gap)`.** `max` is by construction an **n = 1** estimate — one under-levelled
+  character who wandered into a late-game check defines it forever, with nothing pulling it back.
+  Same disease `ranking.ts` treats with shrinkage; for a distribution the cure is a robust
+  statistic. p90 rather than p50 because Q3.6's word is *accessible*, and an accessibility claim
+  that holds only for the median failing player is not one.
+- **`Fortify` only.** Restore refills *damaged* points and cannot lift a stat above base, so it can
+  only close a gap for a damaged player — and `stat_damage` is emitted by **nothing**. Revisit when
+  the `03` additive fields ship.
+- **`affected_kind` is load-bearing in the join.** Skill and attribute ids collide across the two
+  enums; joining on `affected` alone would credit a stat with another stat's remedies.
+- **`gap <= 0` rows are excluded.** Failing while *meeting* the bar on the deciding stat (multi-stat
+  AND, or a pass override) is a real but different problem, and including it drags every gap down.
+
+### ⚠️ Known limitations — biasing the result, not hidden
+
+- **`base_value` is emitted by nothing** (0 of 329,964 rows), though `03` designed it 2026-07-27.
+  `skill_value` is the **modified** value, so a player who already drank a potion shows a smaller
+  gap than their build has ⇒ **every gap here is biased low**, and remedies therefore look *more*
+  sufficient than they are. This is the same caveat `10` already records against Q3.5/Q3.6.
+- **No `env` filter**, matching every other `/stats` endpoint. Seeded rows carry `env='synthetic'`
+  and currently dominate (329,932 of 329,964), so treat magnitudes as **shape, not finding**.
+- ⚠️ **A seeder artefact is visible in the current data:** `security` `gap_p90` sticks at 30 while
+  `threshold` climbs 40 → 50 → 60 → 100. Real players facing a 100 bar would show enormous gaps;
+  the generator is drawing `skill_value` as `threshold − U(0,~30)`.
