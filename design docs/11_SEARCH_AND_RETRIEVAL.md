@@ -921,7 +921,10 @@ shape again, data from one context contaminating a dataset meant for another.
 measured mod, nothing else), not a capture of a play session. Load order matters here because it
 must be *controlled*, not because it should be *recorded*.
 
-⚠️ **Blocked on a schema decision.** `game_records`' primary key is `record_id` **alone**, not
+✅ **RESOLVED 2026-07-27 — see §14. Option A: `record_id` stays the PK, ingest became an ordered
+merge, and `source` means "the file that won."**
+
+~~⚠️ **Blocked on a schema decision.**~~ `game_records`' primary key is `record_id` **alone**, not
 `(source, record_id)`. Where Tribunal overrides a Morrowind record they collide: the later ingest
 silently wins and flips `source`. That is arguably correct load-order semantics, but it breaks
 `verify-corpus`, which reconciles per source — overridden records would read as "missing from
@@ -1003,3 +1006,87 @@ local extractor lifts them into a manifest, and the existing ingest CLI loads th
 - whether the survey is one-shot manual or re-runnable per load order change
 - how a stale survey is detected — the world changes when the load order does, and a placement
   table that silently describes an old load order is the same class of bug as `§12`
+
+---
+
+## 14. Multi-plugin corpus — the ordered merge (BUILT 2026-07-27)
+
+### The decision
+
+`game_records.record_id` stays the **primary key alone**. `source` is a **label meaning "the file
+that won"**, not a namespace. The corpus therefore holds **one row per game object, in its effective
+state** — the game as played.
+
+**Why not `(source, record_id)`:** this is a *search index*. Two rows for one object means a query
+can return the superseded version — a pre-patch item description competing with the patched one,
+ranked by relevance, with nothing marking it stale. It would also duplicate embeddings and HNSW
+entries for rows that must never surface. Provenance is worth less than correctness here, and
+nothing in `10`'s question inventory asks which file defined a record.
+
+### The consequence: ingest is a MERGE, and a single plugin is REFUSED
+
+Last-wins across sources makes a single-file run **destructive and silent**: re-ingesting
+`Morrowind.esm` alone re-asserts its text over every Tribunal and Bloodmoon override, with no error
+and no count. So `ingest-corpus` now takes the whole load order, earliest first, and **refuses one
+plugin** unless `--single` states the intent:
+
+```
+npm run ingest-corpus -- mw.txt Morrowind.esm tri.txt Tribunal.esm bm.txt Bloodmoon.esm
+```
+
+⭐ **Refuses rather than warns.** A warning printed over a destructive default is a warning nobody
+reads twice.
+
+### An ordering detail that was load-bearing and undocumented
+
+Overriding a record that got **shorter** (a book of 6 chunks replaced by one of 3) leaves chunks
+`#3–#5` orphaned — the parent still exists, so the FK cascade cannot catch them. They are removed
+only because **the record upsert runs BEFORE the orphan sweep**, flipping `source` first and thus
+pulling the stale chunks into the source-scoped sweep's candidate set.
+
+Had the sweep run first, those chunks would have survived as **stale searchable text with live
+embeddings**, attached to a record whose content no longer contains them. Correct today, by an
+ordering that nothing asserted. Recorded here because it is invisible in the code.
+
+### MEASURED — the merge, 2026-07-27
+
+| | before (Morrowind only) | after (base + expansions) |
+| --- | --- | --- |
+| records | 34,785 | **45,209** |
+| chunks | 36,567 | **47,130** |
+| effects | 2,960 | **3,446** |
+| overrides applied | — | **5,681** |
+
+Run time **57 s**, ~8,350 new embeddings (~**$0.008**). Morrowind re-ingested with **0 chunks
+written** — the hash-diff correctly recognised it as unchanged.
+
+⭐ **5,681 overrides is far more than the ~397 cells predicted, and spot-checking explains it:
+expansions re-serialise the dialogue topics they touch.** A sampled `INFO` record was **byte-
+identical** across `Morrowind.esm` and `Tribunal.esm` — same id, prev/next pointers, text, actor and
+script. So most "overrides" change nothing but the label. Verified rather than assumed, because
+2,719 base dialogue records changing owner is exactly what a silent id-collision would also look
+like.
+
+### `verify-corpus` had to change too — and it caught itself
+
+The first version reconciled **one plugin against a per-source `WHERE`**, and after the merge it
+reported **3,189 false discrepancies**: every overridden record read as "missing from Morrowind.esm"
+while being present and correct. It now replays the merge in load order and verifies the
+**effective** state, scoped to the plugins under test so an unrelated source (a mod's plugin, the
+test fixture) is never mistaken for corruption.
+
+```
+merged: 45,209 records, 5,681 overrides
+records 45209=45209 · effects 3446=3446 · ✅ database matches the dump
+```
+
+⚠️ **The tool that exists to catch silent corruption was itself silently wrong for one run.** It
+failed loudly, which is why it took minutes rather than a day — the same argument as exiting
+non-zero.
+
+### ▶ Not done
+
+- **Prod still holds Morrowind-only** (34,785 records). Needs the same ordered merge through the RDS
+  tunnel.
+- CCFF's own `.omwaddon` is still not ingested — it is the *measured mod*, so it belongs at the end
+  of the load order.

@@ -21,18 +21,38 @@ import fs from 'node:fs';
 import pg from 'pg';
 import { parseEsmDump } from './parseEsmDump.js';
 
-const [dumpPath, source] = process.argv.slice(2);
-if (!dumpPath || !source) {
-  console.error('usage: npm run verify-corpus -- <dump.txt> <source>');
+// ⚠️ VERIFIES THE MERGE, NOT ONE PLUGIN — corrected 2026-07-27 after the first version reported
+// 3,189 false discrepancies.
+//
+// `record_id` is the primary key alone, so a later plugin OVERWRITES the records it overrides and
+// `source` records only WHICH FILE WON. Verifying a single plugin against a per-source WHERE clause
+// therefore reports every overridden record as "missing from Morrowind.esm" when it is present and
+// correct, merely labelled Tribunal. Measured: Tribunal and Bloodmoon claim 3,189 Morrowind
+// records, and spot-checking showed the content is BYTE-IDENTICAL — expansions re-serialise the
+// dialogue topics they touch, so most "overrides" change nothing but the label.
+//
+// So the expected state is the MERGE of the whole load order, computed the same way ingest applies
+// it: parse each dump in order, last writer wins. Anything else compares against a game that is
+// not the one in the database.
+const argv = process.argv.slice(2);
+if (argv.length === 0 || argv.length % 2 !== 0) {
+  console.error(
+    'usage: npm run verify-corpus -- <dump> <source> [<dump> <source> ...]\n' +
+    '       plugins in LOAD ORDER, earliest first — the same list ingest was given.',
+  );
   process.exit(2);
+}
+const plugins: Array<{ dumpPath: string; source: string }> = [];
+for (let i = 0; i < argv.length; i += 2) {
+  plugins.push({ dumpPath: argv[i]!, source: argv[i + 1]! });
 }
 
 const url = process.env.DATABASE_URL;
 if (!url) { console.error('DATABASE_URL is required'); process.exit(2); }
 // Print the target first: this reads a database that may be PROD, and knowing which one is
 // answering is the difference between a passing check and a meaningless one.
-console.log(`[verify] database: ${new URL(url).host}`);
-console.log(`[verify] dump    : ${dumpPath}  (source=${source})`);
+console.log(`[verify] database  : ${new URL(url).host}`);
+console.log(`[verify] load order: ${plugins.map((p) => p.source).join(' -> ')}`);
 
 const client = new pg.Client({
   connectionString: url,
@@ -40,24 +60,34 @@ const client = new pg.Client({
 });
 await client.connect();
 
-// `source` is not a parser argument -- it is a database column, applied at ingest. Here it is
-// only the WHERE clause that selects which stored rows this dump is supposed to account for.
-const parsed: any = parseEsmDump(fs.readFileSync(dumpPath, 'utf8'));
-const records: any[] = parsed.records ?? parsed;
-console.log(`[verify] parsed  : ${records.length} records`);
-
-// Expected effect count per record id, from the SOURCE.
+// Replay the merge in load order. Last writer wins, exactly as ingest applies it -- so the
+// expectation is the EFFECTIVE game, which is what the corpus is supposed to hold.
 const expected = new Map<string, number>();
-for (const r of records) expected.set(String(r.recordId).toLowerCase(), r.effects.length);
+let overridden = 0;
+for (const { dumpPath, source } of plugins) {
+  const parsed: any = parseEsmDump(fs.readFileSync(dumpPath, 'utf8'));
+  const records: any[] = parsed.records ?? parsed;
+  let claimed = 0;
+  for (const r of records) {
+    const id = String(r.recordId).toLowerCase();
+    if (expected.has(id)) { claimed++; overridden++; }
+    expected.set(id, r.effects.length);
+  }
+  console.log(`[verify] ${source}: ${records.length} records (${claimed} overriding an earlier plugin)`);
+}
+console.log(`[verify] merged   : ${expected.size} records, ${overridden} override(s) applied`);
 
+// Scoped to the plugins under test, so an unrelated source (a mod's own plugin, the test fixture)
+// is not mistaken for corpus corruption.
+const sources = plugins.map((p) => p.source);
 const { rows } = await client.query(
   `SELECT lower(r.record_id) AS id, r.type,
           count(e.*)::int AS effects
      FROM game_records r
      LEFT JOIN record_effects e ON e.record_id = r.record_id
-    WHERE r.source = $1
+    WHERE r.source = ANY($1)
     GROUP BY 1, 2`,
-  [source],
+  [sources],
 );
 await client.end();
 

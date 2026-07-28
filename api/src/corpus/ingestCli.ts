@@ -1,15 +1,26 @@
 // Entrypoint for corpus ingest. The logic lives in ingest.ts; this is only the process wrapper
 // -- arguments, provider selection, logging, exit code, pool teardown.
 //
-//   1. produce the dump (local, needs the game files + the OpenMW install):
-//        "H:/OpenMW 0.51.0/esmtool.exe" dump -p "H:/Morrowind - OpenMW/Data Files/Morrowind.esm" > mw.txt
-//   2. ingest it:
-//        npm run ingest-corpus -- mw.txt Morrowind.esm            # real embeddings, needs a key
-//        npm run ingest-corpus -- mw.txt Morrowind.esm --fake     # offline, no spend
+//   1. produce a dump per plugin (local; needs the game files + the OpenMW install):
+//        "H:/OpenMW 0.51.0/esmtool.exe" dump -p ".../Morrowind.esm" > mw.txt
+//   2. ingest the WHOLE LOAD ORDER, earliest first:
+//        npm run ingest-corpus -- mw.txt Morrowind.esm tri.txt Tribunal.esm bm.txt Bloodmoon.esm
+//        npm run ingest-corpus -- ... --fake      # offline, no spend
 //
-// It takes a dump FILE rather than shelling out to esmtool: the tool's path varies per machine,
-// and keeping the two steps separate means a parser change can be re-run against a saved dump
-// without re-extracting 31 MB.
+// ⚠️ A SINGLE PLUGIN IS REFUSED unless you pass --single, and that is a correctness guard rather
+// than ceremony. `game_records.record_id` is the primary key ALONE, so `source` is a label, not a
+// namespace: later plugins OVERWRITE the records they override, which is exactly right (the corpus
+// holds the EFFECTIVE game). But it makes a single-file run destructive in a way nothing reports --
+// re-ingesting Morrowind.esm on its own silently re-asserts Morrowind's text over every Tribunal
+// and Bloodmoon override, and the corpus goes quietly stale. No error, no count, no tell.
+//
+// ⚠️ SCOPE (11 §13): the corpus describes the STABLE BASE every mod author shares -- Morrowind +
+// Tribunal + Bloodmoon -- plus the ONE mod being measured. It is deliberately NOT one author's
+// personal load order: that is unstable, unique to them, and would make the corpus unreproducible.
+//
+// It takes dump FILES rather than shelling out to esmtool: the tool's path varies per machine, and
+// keeping the steps separate means a parser change can be re-run against saved dumps without
+// re-extracting 31 MB.
 //
 // ⚠️ Ingest runs LOCALLY and writes to whatever DATABASE_URL points at. That is deliberate --
 // the .esm files cannot leave this machine (11 §8) -- but it means pointing it at prod is one
@@ -20,11 +31,36 @@ import { parseEsmDump } from './parseEsmDump.js';
 import { ingestCorpus } from './ingest.js';
 import { FakeEmbeddingProvider, OpenAIEmbeddingProvider, type EmbeddingProvider } from './embeddings.js';
 
-const [dumpPath, source, ...flags] = process.argv.slice(2);
-const useFake = flags.includes('--fake');
+const argv = process.argv.slice(2);
+const useFake = argv.includes('--fake');
+const allowSingle = argv.includes('--single');
+const positional = argv.filter((a) => !a.startsWith('--'));
 
-if (!dumpPath || !source) {
-  console.error('usage: ingest-corpus <esmtool-dump-file> <source-name> [--fake]');
+const USAGE =
+  'usage: ingest-corpus <dump> <source> [<dump> <source> ...] [--fake] [--single]\n' +
+  '       plugins must be listed in LOAD ORDER, earliest first.';
+
+if (positional.length === 0 || positional.length % 2 !== 0) {
+  console.error(USAGE);
+  process.exit(2);
+}
+
+const plugins = [];
+for (let i = 0; i < positional.length; i += 2) {
+  plugins.push({ dumpPath: positional[i]!, source: positional[i + 1]! });
+}
+
+// The guard. Refuses rather than warns: a warning on a destructive default is a warning nobody
+// reads twice. --single exists for the legitimate case (re-ingesting only the measured mod's
+// plugin, which overrides nothing) and forces that intent to be stated.
+if (plugins.length === 1 && !allowSingle) {
+  console.error(
+    `[corpus] REFUSING a single-plugin ingest.\n` +
+    `[corpus] record_id is the primary key, so a later plugin OVERWRITES the records it overrides.\n` +
+    `[corpus] Running one file re-asserts its text over every later override -- silently.\n` +
+    `[corpus] Pass the whole load order, or --single if you really mean just this one.\n\n` +
+    USAGE,
+  );
   process.exit(2);
 }
 
@@ -53,33 +89,39 @@ const dbHost = (() => {
 
 const t0 = Date.now();
 try {
-  const dump = readFileSync(dumpPath, 'utf8');
-  const { records, skippedEmpty } = parseEsmDump(dump);
-  console.log(
-    `[corpus] parsed ${records.length} record(s) from ${dumpPath} ` +
-    `(${skippedEmpty} skipped as empty) -> ${dbHost}`,
-  );
+  console.log(`[corpus] load order (${plugins.length}): ${plugins.map((p) => p.source).join(' -> ')}`);
+  console.log(`[corpus] target: ${dbHost}`);
 
-  const stats = await ingestCorpus({
-    db, provider, records, source,
-    onProgress: (m) => console.log(`[corpus] ${m}`),
-  });
+  // Sequential and IN ORDER -- the later plugin must see the earlier one's rows to override them.
+  //
+  // ⚠️ Each plugin is its own transaction, so a failure partway leaves the earlier plugins applied
+  // rather than rolling the whole merge back. Holding one transaction across all of them would pin
+  // a snapshot for minutes of embedding calls (11 §8's reasoning). The recovery is simply to re-run
+  // the full merge, which is idempotent -- hash-diff means unchanged chunks cost nothing.
+  for (const { dumpPath, source } of plugins) {
+    const { records, skippedEmpty } = parseEsmDump(readFileSync(dumpPath, 'utf8'));
+    console.log(
+      `[corpus] ${source}: parsed ${records.length} record(s) from ${dumpPath} ` +
+      `(${skippedEmpty} skipped as empty)`,
+    );
 
-  console.log(
-    `[corpus] done in ${Date.now() - t0} ms\n` +
-    `  records upserted   ${stats.recordsUpserted}   (${stats.duplicateRecordsCollapsed} duplicate id(s) collapsed)\n` +
-    `  chunks total       ${stats.chunksTotal}\n` +
-    `  chunks skipped     ${stats.chunksSkipped}   (hash + model + dims already matched)\n` +
-    `  chunks written     ${stats.chunksWritten}\n` +
-    `  texts embedded     ${stats.textsEmbedded}   (${stats.duplicatesCollapsed} duplicate(s) collapsed)\n` +
-    `  effects written    ${stats.effectsWritten}\n` +
-    `  orphan records     ${stats.orphanRecordsDeleted}\n` +
-    `  orphan chunks      ${stats.orphanChunksDeleted}`,
-  );
+    const stats = await ingestCorpus({
+      db, provider, records, source,
+      onProgress: (m) => console.log(`[corpus]   ${m}`),
+    });
+
+    console.log(
+      `[corpus] ${source}: upserted ${stats.recordsUpserted} ` +
+      `(${stats.duplicateRecordsCollapsed} dup id(s) collapsed) · ` +
+      `chunks ${stats.chunksWritten} written / ${stats.chunksSkipped} skipped · ` +
+      `embedded ${stats.textsEmbedded} · effects ${stats.effectsWritten} · ` +
+      `orphans ${stats.orphanRecordsDeleted} rec / ${stats.orphanChunksDeleted} chunk`,
+    );
+  }
+
+  console.log(`[corpus] done in ${Date.now() - t0} ms`);
 } catch (err) {
-  // Non-zero so a wrapper script or CI notices. The write is one transaction, so a failure has
-  // already rolled back -- there is no partial corpus to clean up, which is the whole reason the
-  // embedding step happens before the transaction opens.
+  // Non-zero so a wrapper script or CI notices.
   console.error('[corpus] FAILED', err);
   process.exitCode = 1;
 } finally {
