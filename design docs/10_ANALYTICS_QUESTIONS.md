@@ -295,16 +295,21 @@ can diff it against what was seen. Design note, not a blocker.
 | 3.3 | Which skills/attributes are actually gated on? | is the design as varied as intended | check count by `skill` / `stat_type` | `SkillCheckResolved` | 🔵 designed |
 | 3.4 | Do players gravitate to one solution when several exist? | are alternatives real or decorative | solution share per multi-route check | `SkillCheckResolved` + `require` | 🔵 designed |
 | 3.5 | **Do players reach for consumables to clear a stat gate, and which ones?** | is the gate passable by preparation, or only by build | boosted ÷ passed, by `item_id` | `ItemConsumed` + `SkillCheckResolved.base_value` | 🔵 **designed 2026-07-27** |
-| 3.6 | ⭐ **Does the game contain an accessible remedy for this gate at all?** | **add content, or retune the threshold** | corpus `record_effects` filtered to the gated stat, cross-referenced with what players actually used | `SkillCheckResolved` **× the corpus** (`11`) | 🔵 **designed 2026-07-27** |
+| 3.6 | ⭐ **Does the game contain an accessible remedy for this gate at all?** | **add content, or retune the threshold** | corpus `record_effects` filtered to the gated stat, cross-referenced with what players actually used | `SkillCheckResolved` **× the corpus** (`11`) | 🟢 **mechanical half BUILT 2026-07-28** — `GET /stats/sufficiency` (`05`). Behavioural half still needs `ItemConsumed`; `reachable` is `UNKNOWN` pending `11 §13` |
 
 ⚠️ **UPDATE 2026-07-27 — "accessible" is NOT computable from the corpus alone.** `game_records`
 stores name/type/text and `record_effects` stores effects; there is **no placement, no value, no
-vendor data**. The corpus also covers only `Morrowind.esm`, missing **Tribunal (121 cells / 6
-potions) and Bloodmoon (276 / 2)** — a bounded 13% / 3% gap. (An earlier version of this note
-compared against a personal 12-file load order and claimed two-thirds of the world was missing;
-that was wrong. The corpus describes **the stable base every author shares plus the mod being
-measured** — one author's mod list is not part of the product. See `11 §13`.) So the honest claim
-today is *"N items mechanically close this gap"*, **not** *"players can reach one"*.
+vendor data**. (An earlier version of this note compared against a personal 12-file load order and
+claimed two-thirds of the world was missing; that was wrong. The corpus describes **the stable base
+every author shares plus the mod being measured** — one author's mod list is not part of the
+product. See `11 §13`.) So the honest claim today is *"N items mechanically close this gap"*,
+**not** *"players can reach one"*.
+
+✅ **CORRECTED 2026-07-28 — the expansion gap is CLOSED.** The note above previously said the
+corpus covered only `Morrowind.esm`, missing Tribunal and Bloodmoon. Since the ordered multi-plugin
+merge (2026-07-27 evening) the corpus is **base + Tribunal + Bloodmoon + CCFF — 45,542 records /
+3,463 effects**, verified `verify-corpus`-green locally *and* in prod. The **placement** gap is the
+one that remains, and it is the one that matters here.
 
 `11 §13` designs the fix: survey the **running game**, which has already merged the load order.
 Until that ships, **the UI must render reachability as UNKNOWN — never inferred.** This is the

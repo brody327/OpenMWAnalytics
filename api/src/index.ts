@@ -11,6 +11,7 @@ import { confrontations } from './stats/confrontations.js';
 import { friction } from './stats/friction.js';
 import { skills } from './stats/skills.js';
 import { ranking } from './stats/ranking.js';
+import { sufficiency } from './stats/sufficiency.js';
 import { search } from './search/search.js';
 import { freshness, heartbeat } from './ops/freshness.js';
 
@@ -50,6 +51,8 @@ app.get('/stats/confrontations', confrontations);
 app.get('/stats/friction', friction);
 app.get('/stats/skills', skills);
 app.get('/stats/ranking', ranking);
+// 10 Q3.6 -- the only /stats route that joins telemetry to the game CORPUS (11).
+app.get('/stats/sufficiency', sufficiency);
 
 // Hybrid search over the game corpus (design docs 11). NOT under /stats: /stats reports on
 // TELEMETRY, this queries a second corpus -- the game's own text -- and joins to it.
