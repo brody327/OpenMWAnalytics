@@ -1084,9 +1084,33 @@ records 45209=45209 · effects 3446=3446 · ✅ database matches the dump
 failed loudly, which is why it took minutes rather than a day — the same argument as exiting
 non-zero.
 
-### ▶ Not done
+### ✅ Both closed 2026-07-27 — CCFF ingested, prod merged
 
-- **Prod still holds Morrowind-only** (34,785 records). Needs the same ordered merge through the RDS
-  tunnel.
-- CCFF's own `.omwaddon` is still not ingested — it is the *measured mod*, so it belongs at the end
-  of the load order.
+```
+merged: 45,542 records, 5,760 overrides
+local  records 45542=45542 · effects 3463=3463 ✅
+prod   records 45542=45542 · effects 3463=3463 ✅
+```
+
+CCFF's plugin (`ccff.omwaddon`, 412 indexable of 624) sits **last** in the load order — it is the
+measured mod, so it must win. It overrides **79** base records, which is it adding to existing
+dialogue topics. Its content is searchable for the first time: `Flordius Fastus` now returns the
+NPC and its dialogue from prod.
+
+⭐ **A DIVERGENCE THE MERGE EXPOSED — code deploys do not migrate data.** Morrowind re-ingested
+locally wrote **7** chunks; against prod it wrote **2,050** (2,007 embedded). Cause: prod's chunks
+were written on 07-26 **before** commit `3bfd63f` ("embed what an item DOES, not just its name"),
+which changed `chunk.ts` so an item's text carries its effects. The code shipped and deployed; the
+**data it was meant to fix never moved.**
+
+So prod served the exact bug `3bfd63f` fixed — *"a potion that makes you more persuasive"* matching
+on the word *potion* — for a full day, while healthy, green and returning confident results. It was
+found only because an unrelated merge re-derived the hashes and 2,000 of them disagreed.
+
+> **A derived artefact is not migrated by deploying the code that derives it.** The chunk text is a
+> function of `chunk.ts`; changing that function invalidates every stored chunk, and nothing in the
+> idempotency key (`text_hash + model + dims`) can notice, because the *hash of the new text* is
+> simply a value that was never stored. Same shape as §8's model-swap trap, one layer up: there, the
+> guard existed; here, nothing was watching.
+> ▶ **Rule: a change to `chunk.ts` requires a re-ingest everywhere, and that is now the only way to
+> know.** `verify-corpus` compares records and effects, **not chunk text** — closing that is open work.
