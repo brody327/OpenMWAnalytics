@@ -998,14 +998,72 @@ is deliberately **not** `OMWA1 ` (the shipper greps for that, so survey lines ar
 local extractor lifts them into a manifest, and the existing ingest CLI loads them
 `source='world-survey'` — local-first, because the world is on the author's machine.
 
-### ▶ Still to decide before building
+### ✅ BUILT 2026-07-28 — all four open decisions closed
 
-- table shape (`item_placements`: area, item_record_id, count, is_exterior, source)
-- ⚠️ **case**: `recordId` from Lua is **lowercase**; corpus ids are mixed-case. Join on
-  `lower(record_id)` or 12 of 353 consumables silently vanish (`03 ItemConsumed`)
-- whether the survey is one-shot manual or re-runnable per load order change
-- how a stale survey is detected — the world changes when the load order does, and a placement
-  table that silently describes an old load order is the same class of bug as `§12`
+⭐ **THE FINDING THAT CHANGED THE DESIGN: `core.contentFiles.list` (OpenMW 0.51).** This section
+previously concluded that because *Lua cannot report an object's provenance*, the survey **must be
+a procedure** — "run it against a controlled load order." A procedure rots. `core.contentFiles`
+(`.list`, `.has()`, `.indexOf()`) reports the **complete set of files that could have produced any
+object**, which makes the requirement *enforceable*:
+
+> Per-object provenance is unnecessary if you **constrain the universe**. If the loaded set IS the
+> controlled set, every object necessarily came from it. Interrogate the world, not each inhabitant.
+
+⚠️ **And the contamination risk was far larger than this doc assumed.** It said "one person's
+12-file load order". The author's actual `openmw.cfg`, measured 2026-07-28: **683 content files**.
+A survey run there would bake hundreds of personal mods' placements into a corpus meant to describe
+the shared base — joining cleanly, reading as fact, with no tell.
+
+| # | decision | resolution |
+| --- | --- | --- |
+| 1 | where the guard lives | ⭐ **REFUSE at ingest** (load order stored regardless) |
+| 2 | what "controlled" means | **required + ban on anything else**, case-insensitive |
+| 3 | one-shot or re-runnable | **re-runnable**, WHOLESALE REPLACEMENT — never a merge |
+| 4 | staleness detection | `load_order_hash`, order-sensitive |
+
+**Why refuse rather than "record it and filter at query time"** (the learner's first instinct,
+reversed on the argument): the load order is recorded at the **manifest** grain, the rows at the
+**placement** grain. A row `(Balmora Council Club, potion_x, 3)` carries nothing saying whether
+`Morrowind.esm` or `RepopulatedMorrowind.esm` put it there. So the only query-time filter available
+is **all-or-nothing** — identical in outcome to refusing, but later, and after a contaminated survey
+has been sitting in the database looking like data. *You can never filter at a finer grain than the
+one you recorded the discriminator at* — the friction-rollup grain rule, running in reverse.
+
+**Why wholesale replacement:** a partial survey merged into an old one produces a world that
+**never existed** — some areas from load order A, some from B — and nothing about the result would
+look wrong. Replacement means the table always describes exactly one coherent world.
+
+**Why the hash is order-sensitive though the allowlist is not:** a reorder can change which file
+wins an override, so a reordered load order describes a *different world*. The allowlist only asks
+"could something unexpected have placed an object", which order cannot affect.
+
+#### Built
+
+- `mod/scripts/omwanalytics/survey.lua` + **`mod/omwanalytics-survey.omwscripts`** — a SEPARATE
+  content file on purpose, so the normal profile is structurally incapable of running the survey.
+  Sentinel **`OMWAS1 `**, never `OMWA1 ` — the shipper matches the literal `'OMWA1 '` via `indexOf`
+  and `OMWAS1 ` does not contain it, so survey lines are invisible to telemetry **by construction**.
+  Emits `begin` → `header` (load order) → `placement`* → `footer` (row count). Lint-clean.
+- `api/src/corpus/surveyManifest.ts` — pure parse + `validateLoadOrder` + `hashLoadOrder`, 10 tests.
+- `api/src/corpus/surveyIngestCli.mts` — `npm run ingest-survey -- <openmw.log> [--allow-extra X]`.
+  One transaction; refuses before writing anything.
+- `world_surveys` + `item_placements` (migration `0007_world_survey.sql`, applied locally).
+
+#### Verified
+
+- Real **683-file** load order ⇒ **exit 1, 677 contaminants named, 0 rows written**.
+- Controlled load order ⇒ exit 0; re-run replaces wholesale (3 placements / 1 survey, stable).
+- Truncated manifest, missing footer, and two interleaved runs are each **refused** — the footer
+  row count is a conservation check, because OpenMW truncates `openmw.log` on relaunch and a
+  partial survey is otherwise indistinguishable from a completed short one.
+- ⚠️ **The `lower(record_id)` hazard was PROVEN, not assumed.** The first check compared
+  `with_lower` vs `naive` on fixture rows and got **3 = 3** — it could not have failed, because
+  every fixture id was already lowercase. Re-run with a genuinely mixed-case corpus id
+  (`Potion_Local_Brew_01`, Mazte): **4 vs 3.** The naive join silently drops it.
+
+▶ **NOT YET RUN.** The tables are deliberately EMPTY — fixture rows were removed rather than left
+sitting in a table that would read as data. Producing a real survey needs a **second OpenMW config**
+containing only `Morrowind.esm` + `Tribunal.esm` + `Bloodmoon.esm` + CCFF + the analytics mod.
 
 ---
 

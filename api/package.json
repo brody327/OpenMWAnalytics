@@ -21,7 +21,8 @@
     "db:studio": "drizzle-kit studio",
     "ingest-corpus": "node --import tsx src/corpus/ingestCli.ts",
     "bench-recall": "node --import tsx src/corpus/benchRecall.mts",
-    "verify-corpus": "node --import tsx src/corpus/verifyCorpus.mts"
+    "verify-corpus": "node --import tsx src/corpus/verifyCorpus.mts",
+    "ingest-survey": "node --import tsx src/corpus/surveyIngestCli.mts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

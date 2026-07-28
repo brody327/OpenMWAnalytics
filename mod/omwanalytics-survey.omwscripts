@@ -1,0 +1,18 @@
+# OpenMW Analytics — world placement survey (BUILD STEP, design docs 11 §13)
+#
+# ⚠️ DO NOT add this to your normal profile. It is deliberately a SEPARATE content file so the
+# survey CANNOT run during ordinary play.
+#
+# The survey must run against a CONTROLLED load order — Morrowind.esm + Tribunal.esm +
+# Bloodmoon.esm + the measured mod + omwanalytics, and nothing else — because Lua cannot report an
+# object's provenance. Run on a modded setup it would silently bake hundreds of personal mods'
+# placements into a corpus meant to describe the shared base.
+#
+# The ingest REFUSES a manifest whose load order fails the allowlist, so a contaminated survey
+# cannot reach the database. This file existing separately is the first line of that defence; the
+# refusal is the second.
+#
+# Usage: point OpenMW at a second config containing only the controlled load order, add
+#   content=omwanalytics-survey.omwscripts
+# launch, load any save, wait for the OMWAS1 footer line in openmw.log, quit.
+GLOBAL: scripts/omwanalytics/survey.lua
