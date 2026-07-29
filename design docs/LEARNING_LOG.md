@@ -1975,3 +1975,98 @@ FACT* (❌ nobody's: "can players get this early?" — a missing number is not a
 rollup, not on chunks), #2 (search-index reason), #3 (mechanism + refuse-vs-warn). #5 landed on the
 3rd try ⇒ **retest cold next session**, different system again. #4 to be re-assessed *in the build*
 by making the learner say what the query can't support.
+
+---
+
+## 2026-07-28 — Q3.6 shipped, world survey built + run, reachability answered
+
+A very long session. Opening recall check, then three builds end to end (sufficiency endpoint,
+world placement survey, reachability), two prod deploys, and a play session that proved four
+emitters at once.
+
+### The through-line: **a check is only worth what it can detect**
+
+This came up **eight times**, and it is the single idea the session should be remembered for. Each
+time, everything *around* the failure looked correct and one value was quietly wrong or empty.
+
+| # | the check that couldn't fail | what it missed |
+| --- | --- | --- |
+| 1 | `/health` returns 200 | would return 200 with search fully degraded |
+| 2 | "is the cache populated?" | a write-only cache passes |
+| 3 | tsc + 58 tests + mutation check + endpoint probe | all verify *the pipeline computes what it was told*; none ask whether the ROWS mean what the query assumed → `Gaenor's Abilities` |
+| 4 | `EXIT=$?` after a pipe | reports `tail`'s status, not the command's |
+| 5 | `with_lower` vs `naive` join on fixture rows → **3 = 3** | every fixture id was already lowercase |
+| 6 | manifest reconciles: header ✅ footer ✅ 6,797 rows ✅ | `load_order` was `null` |
+| 7 | `is_exterior` is a plausible boolean either way | inverted on all 6,797 rows |
+| 8 | "no placement row ⇒ NOT_PLACED" | SPEL/ENCH can never *have* a placement |
+
+**The discriminating checks that did work**, all of them observations the failure is structurally
+incapable of producing: 9 ms is below the floor of a network round trip · a semantic-only search hit
+(`lexical_rank: null`) · `no_remedy: 1` appearing in prod after the abilities fix · `404` on a new
+route while a known-good route returns `200` · every exterior area matching `%region%` · a
+byte-identical INFO record across two plugins.
+
+### Assessment — the opening recall check (5 questions)
+
+**2 partial, 3 missed.** Full detail above under *OPENING RECALL CHECK*. The headline: #4 (what the
+corpus cannot answer) and #5 (a check that cannot pass under the failure) were **one gap, not two**,
+and #5 took **three representations** before it landed — prose failed, the code failed, a physical
+analogy (the office copier vs. the print shop) plus a floor argument on the learner's own 2,640 ms /
+9 ms measurement worked.
+
+⚠️ **Then the learner reproduced the platform's own historical bug from first principles**, twice
+naming `/health` as the way to prove a cache is live — the exact endpoint that stayed green through
+two silent deploy failures. That is worth more than a correct answer would have been: it located a
+real model, not a phrasing gap.
+
+### What the learner got RIGHT, unprompted — the session's real signal
+
+1. ⭐ **`max` over `min` as the headline predicate, on a DOMAIN argument I had not made:** *"Morrowind
+   is heavy on chance — combat, spells, potions are all RNG. Having a chance at something is more
+   important than the min being right."* Reporting only guarantees would describe a game this isn't.
+   It also happens to err in the cheap direction (an undercount buys a weekend of authoring; an
+   overcount buys an hour of hint dialogue).
+2. ⭐⭐ **Caught a global `duration <> 0` filter before it shipped**, from equipment knowledge:
+   constant-effect enchantments are permanent *while worn*. The filter would have deleted
+   `CCFF_lelene_ring_en` — **a Personality ring authored by the very mod being measured, on a
+   Personality gate.** The worst false negative available. Fix scoped to SPEL.
+3. ⭐⭐ **Independently re-derived two existing designs.** Asked to choose between a temporal join and
+   something better, proposed reading active effects / base value at the check — which is exactly
+   `03`'s `base_value`/`stat_modifier`/`stat_damage` — and then identified the missing denominator
+   ("if they don't attempt it, how will we know?"), which is exactly `SkillCheckDisplayed`.
+   Their instinct on the alternative was also right: *"the timestamp one is quite wonky."*
+   **A temporal window is a PROXY — it infers from co-occurrence a fact the engine can state
+   exactly.** Same error class as `duration = 0` standing in for the SPEL `Type` field. Twice in one
+   session, and the learner rejected it both times.
+4. **Carried NULL-magnitude ingredients separately** rather than dropping or counting them. This
+   looked pedantic and was not: on the first real placement query, **three of the four commonest
+   Fortify-Personality items have no recorded magnitude**. Dropping them would have reported
+   "7 instances exist" about a stat the world is generous with.
+5. **Reversed their own call on the grain argument.** First instinct was "record the load order and
+   filter at query time"; accepted refuse-at-ingest once shown that provenance is recorded at the
+   MANIFEST grain and rows at the PLACEMENT grain, so the only available filter is all-or-nothing.
+   *You can never filter at a finer grain than the one you recorded the discriminator at* — the
+   friction-rollup rule, running in reverse.
+
+### ⚠️ Where the learner is still weak — carry forward
+
+- **shrinkage vs `log(attempts)` merged again.** Asked why `max(gap)` is the same problem as a
+  1-attempt topic, they reached for `log1p` (the volume weight) when the answer was **shrinkage**
+  (the small-n rate defence). Diagnosed the disease correctly — *one observation owns the answer* —
+  but named the wrong cure. **Third time this pair has blurred.** Next spiral: give a case where the
+  two point in OPPOSITE directions and make them predict the ordering.
+- **#1 (derived-artefact drift) still unassessed after the miss.** Retest on the friction rollup, not
+  on chunks — the rollup is the instance they have never been shown.
+- **#5 landed on the third try ⇒ retest COLD next session, on a third system.**
+
+### My own errors, recorded because the pattern matters
+
+Six, and every one was a check that couldn't detect its failure — the same lesson from the other
+side: `EXIT=$?` after a pipe · a case-sensitive id query against a mixed-case corpus (**after
+documenting that exact hazard twice the same day**) · running `verify-corpus` per-plugin, which its
+own header warns produces false "missing" rows · the `is_exterior` inversion · `NOT_PLACED` on
+un-surveyable types · and shipping `Gaenor's Abilities` to prod. Also **printed live credentials into
+the transcript** by grepping `aws.txt`.
+
+▶ **The habit to build from this: before trusting a green check, ask what a failing world would have
+printed.** If the answer is "the same thing", the check is decoration.
