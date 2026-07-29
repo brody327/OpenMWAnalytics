@@ -16,6 +16,9 @@ const gate = (over: Partial<GateGap>): GateGap => ({
   reliable: 0,
   possible: 0,
   unknown_magnitude: 0,
+  placed_remedies: 0,
+  placed_areas: 0,
+  surveyable_possible: 0,
   ...over,
 });
 
@@ -48,6 +51,64 @@ test('unknown-magnitude items never change the verdict', () => {
   const g = classifyGate(gate({ reliable: 0, possible: 0, unknown_magnitude: 5 }));
   assert.equal(g.verdict, 'no_remedy');
   assert.equal(g.unknown_magnitude, 5);
+});
+
+test('⭐⭐ with NO survey ingested, reachability is UNKNOWN — never NOT_PLACED', () => {
+  // The dangerous default. With no survey every gate reports zero placements, which is
+  // indistinguishable from "surveyed and found nothing" -- and that is the more alarming reading,
+  // the one that would send an author writing content that already exists. Absence of data must
+  // not render as a finding.
+  const g = classifyGate(gate({ possible: 4, placed_remedies: 0, placed_areas: 0 }), false);
+  assert.equal(g.reachable, 'UNKNOWN');
+  assert.equal(g.placed_remedies, 0);
+});
+
+test('with a survey and a placed remedy -> PLACED', () => {
+  const g = classifyGate(
+    gate({ possible: 4, surveyable_possible: 2, placed_remedies: 2, placed_areas: 35 }),
+    true,
+  );
+  assert.equal(g.reachable, 'PLACED');
+  assert.equal(g.placed_areas, 35);
+});
+
+test('with a survey, a surveyable remedy, and no placement -> NOT_PLACED (NOT "unobtainable")', () => {
+  // Merchants are outside the survey by design, so this value means "not found in the world or a
+  // container". The response-level note says so; this test pins that the value is reachable at all.
+  const g = classifyGate(
+    gate({ possible: 4, surveyable_possible: 3, placed_remedies: 0, placed_areas: 0 }),
+    true,
+  );
+  assert.equal(g.reachable, 'NOT_PLACED');
+});
+
+test('⭐⭐ a SPELL-ONLY gate is UNKNOWN, never NOT_PLACED', () => {
+  // The real security @ 25 gate: its only remedy is `Wild Fortify Security Skill`, a SPEL. Spells
+  // are not objects lying in containers, and an ENCH record is an enchantment *definition* whose
+  // carrying item is a different record -- measured, 372 SPEL + 251 ENCH fortify effects with 0
+  // placements between them, by construction.
+  //
+  // Reporting NOT_PLACED here would claim we looked somewhere we cannot look. This is the same
+  // overclaim as inferring reachability, reached from the opposite direction, and it is the bug
+  // this field exists to prevent.
+  const g = classifyGate(
+    gate({ possible: 1, surveyable_possible: 0, placed_remedies: 0, placed_areas: 0 }),
+    true,
+  );
+  assert.equal(g.reachable, 'UNKNOWN');
+  assert.equal(g.verdict, 'gamble_only'); // the mechanical verdict is unaffected
+});
+
+test('⭐ the response note CHANGES with survey state, and names the merchant exclusion', () => {
+  const without = classifyGates([gate({})], false);
+  const withSurvey = classifyGates([gate({})], true);
+
+  assert.equal(without.surveyed, false);
+  assert.match(without.reachability_note, /UNKNOWN and must not be inferred/);
+
+  assert.equal(withSurvey.surveyed, true);
+  assert.match(withSurvey.reachability_note, /MERCHANT INVENTORIES ARE NOT SURVEYED/);
+  assert.match(withSurvey.reachability_note, /does NOT mean unobtainable/);
 });
 
 test('reachable is UNKNOWN on every row, and the note survives on the response', () => {

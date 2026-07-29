@@ -458,3 +458,57 @@ this filter retains only by the accident of their having durations. ▶ Belongs 
 **Verified:** Gaenor drops out at gaps ≥30 while all three constant-effect Personality enchantments
 survive. The filter is a **no-op on local data** — the seeder caps gaps near 30 and abilities start
 at 70 — so the discriminating check is prod's `luck` gate at gap 70 going `reliable: 1 → 0`.
+
+### ✅ `reachable` is now answered from real data (2026-07-28)
+
+The world survey (`11 §13`) is ingested — 6,797 placements — so `reachable` is no longer the literal
+`'UNKNOWN'` on every row. New response fields: `surveyed` (top level), plus `placed_remedies`,
+`placed_areas` and `surveyable_possible` per gate.
+
+| value | meaning |
+| --- | --- |
+| `PLACED` | at least one gap-closing remedy appears in the surveyed world |
+| `NOT_PLACED` | a **surveyable** gap-closing remedy exists and was found nowhere |
+| `UNKNOWN` | no survey ingested, **or** no gap-closing remedy is of a surveyable type |
+
+⚠️ **`NOT_PLACED` DOES NOT MEAN "UNOBTAINABLE".** Merchant inventories are deliberately outside the
+survey (leveled-list RNG restocking on a timer is not a stable design surface), so a remedy found
+nowhere in the world may still be purchasable. The caveat is carried **on the response**, not only
+in the source: a consumer that drops `reachability_note` is making a claim we did not.
+
+#### ⚠️⚠️ The bug this shipped with for one commit — 5,399 gates told a falsehood
+
+The first version compared remedies against `item_placements` and called anything with no row
+`NOT_PLACED`. Measured immediately afterwards:
+
+| remedy type | fortify effects | with a placement |
+| --- | --- | --- |
+| **SPEL** | 372 | **0** |
+| **ENCH** | 251 | **0** |
+| ALCH | 63 | 51 |
+| INGR | 61 | 37 |
+
+**SPEL and ENCH can never have a placement.** A spell is not an object lying in a container, and an
+`ENCH` record is an enchantment *definition* whose carrying item is a different record — and the
+survey collects only `types.Potion` and `types.Ingredient` in any case. So `NOT_PLACED` was
+claiming *"we looked and did not find it"* about somewhere we cannot look. **This is the same
+overclaim the endpoint was built to prevent, arrived at from the opposite direction:** the first
+version guarded against inventing reachability and then invented UNreachability instead.
+
+Fixed with `surveyable_possible` — how many gap-closing remedies are of a type the survey can see.
+Zero ⇒ `UNKNOWN`. The correction moved **5,399 of 6,687 gates** from `NOT_PLACED` to `UNKNOWN`;
+`NOT_PLACED` now occurs **zero** times, which is itself a finding: every gate with a surveyable
+remedy that closes its gap has one placed somewhere.
+
+⭐ It was caught by reading one implausible row, not by a test — a `security` gate reported
+`NOT_PLACED` whose only remedy is `Wild Fortify Security Skill`, a spell. Both the type table and a
+spell-only test now pin it.
+
+#### The reachability answer fails to UNKNOWN in three places, all absences rather than findings
+
+1. no survey ingested (`surveyed = false`) — otherwise every gate reports zero placements, which is
+   indistinguishable from "surveyed and found nothing", and that is the more alarming reading;
+2. no gap-closing remedy of a surveyable type;
+3. placement counted only for remedies that **actually close the gap** (`magnitude_max >= gap_p90`)
+   — counting any Fortify placement would report "reachable" on the strength of a +5 potion against
+   a 25-point gap: true about the world, useless about the gate.

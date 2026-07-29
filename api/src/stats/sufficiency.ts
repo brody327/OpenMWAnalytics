@@ -85,6 +85,20 @@ export interface GateGap {
   possible: number;
   /** count whose magnitude is absent from the dump entirely (INGR) */
   unknown_magnitude: number;
+  /** Of the `possible` remedies, how many appear anywhere in the surveyed world (11 §13). */
+  placed_remedies: number;
+  /** Distinct areas in which any gap-closing remedy appears. */
+  placed_areas: number;
+  /**
+   * How many gap-closing remedies are of a type the survey can even SEE (ALCH/INGR).
+   *
+   * ⚠️ Load-bearing. SPEL and ENCH remedies can NEVER have a placement: a spell is not an object
+   * lying in a container, and an ENCH record is an enchantment *definition* whose carrying item is
+   * a different record. Measured: 372 SPEL and 251 ENCH fortify effects, 0 placements between them,
+   * by construction. Without this, every spell-only gate reports NOT_PLACED -- "we looked and did
+   * not find it" when we could not have found it. Zero here means the honest answer is UNKNOWN.
+   */
+  surveyable_possible: number;
 }
 
 /** What an author should DO about this gate. 10 §2: every view ends in "...so do X". */
@@ -96,37 +110,99 @@ export type Verdict =
   /** at least one item closes the gap on every roll -- if players still fail, they can't FIND it */
   | 'remedy_exists';
 
+/**
+ * Whether any remedy that closes this gate is actually FINDABLE in the surveyed world (11 §13).
+ *
+ * ⚠️ READ `NOT_PLACED` CAREFULLY -- it does NOT mean "unobtainable". The survey covers loose items
+ * and CONTAINERS; **merchant inventories are deliberately excluded** (leveled-list RNG that
+ * restocks on a timer is not a stable surface a designer can reason about). A player may still be
+ * able to BUY a remedy that appears nowhere in the world. Collapsing that into "unreachable" would
+ * be the exact overclaim this endpoint was built to avoid.
+ *
+ * `UNKNOWN` is the honest answer when no survey has been ingested, and it is the DEFAULT: absence
+ * of placement data must never read as absence of placement.
+ */
+export type Reachability =
+  /** at least one gap-closing remedy appears in the surveyed world */
+  | 'PLACED'
+  /** no gap-closing remedy was found loose or in a container -- merchants NOT surveyed */
+  | 'NOT_PLACED'
+  /** no survey ingested; nothing can be said */
+  | 'UNKNOWN';
+
 export interface GateSufficiency extends GateGap {
   verdict: Verdict;
-  /** ALWAYS 'UNKNOWN'. See the boundary note above -- never inferred, never omitted. */
-  reachable: 'UNKNOWN';
+  reachable: Reachability;
+  /** How many of the `possible` remedies have at least one placement. 0 when `UNKNOWN`. */
+  placed_remedies: number;
+  /** Distinct areas in which any gap-closing remedy appears. 0 when `UNKNOWN`. */
+  placed_areas: number;
 }
 
 export interface SufficiencyResult {
   /** Restated on the response so a consumer cannot lose it in transit. */
   reachability_note: string;
+  /** Whether a world survey has been ingested at all. False ⇒ every `reachable` is `UNKNOWN`. */
+  surveyed: boolean;
   gates: GateSufficiency[];
 }
 
 const REACHABILITY_NOTE =
-  'Mechanical sufficiency only. The corpus has no placement, value or vendor data, so whether a ' +
-  'player can OBTAIN any listed remedy is UNKNOWN and must not be inferred.';
+  'Mechanical sufficiency only. No world survey has been ingested, so whether a player can OBTAIN ' +
+  'any listed remedy is UNKNOWN and must not be inferred.';
+
+// ⚠️ The caveat is carried ON THE RESPONSE, not just in this file. NOT_PLACED is the value most
+// likely to be read as "unobtainable", and it does not mean that: merchant inventories are
+// deliberately outside the survey (11 §13 -- leveled-list RNG that restocks on a timer is not a
+// stable surface a designer can reason about), so a remedy that appears nowhere in the world may
+// still be purchasable. A consumer that drops this string is making a claim we did not.
+const PLACEMENT_NOTE =
+  'Placement is from a world survey of loose items and containers (11 §13). MERCHANT INVENTORIES ' +
+  'ARE NOT SURVEYED, so NOT_PLACED means "not found lying in the world or inside a container" -- ' +
+  'it does NOT mean unobtainable; a player may still be able to buy one.';
 
 /**
  * Pure classifier -- no database, no I/O, hand-computable. Split out for the same reason
  * `rankTopics` is: the JUDGEMENT is the part worth testing and showing, and it must be
  * exercisable without a Postgres.
  */
-export function classifyGate(g: GateGap): GateSufficiency {
+export function classifyGate(g: GateGap, surveyed = false): GateSufficiency {
   // Order matters: `possible` is a superset of `reliable`, so test emptiness first.
   const verdict: Verdict =
     g.possible === 0 ? 'no_remedy' : g.reliable === 0 ? 'gamble_only' : 'remedy_exists';
 
-  return { ...g, verdict, reachable: 'UNKNOWN' };
+  // ⚠️ FAIL TO UNKNOWN, never to NOT_PLACED. With no survey ingested every gate would otherwise
+  // report zero placements -- which is indistinguishable from "surveyed and found nothing", and is
+  // the more alarming of the two readings. Absence of data must not render as a finding.
+  // Three ways to land on UNKNOWN, and they are all absences rather than findings:
+  //   1. no survey ingested at all;
+  //   2. no gap-closing remedy is of a SURVEYABLE type -- a spell-only gate cannot be answered by
+  //      a survey of loose items and containers, and reporting NOT_PLACED there would claim we
+  //      looked somewhere we cannot look;
+  // only when we could have seen a placement does NOT_PLACED mean anything.
+  const reachable: Reachability = !surveyed
+    ? 'UNKNOWN'
+    : g.surveyable_possible === 0
+      ? 'UNKNOWN'
+      : g.placed_remedies > 0
+        ? 'PLACED'
+        : 'NOT_PLACED';
+
+  return {
+    ...g,
+    verdict,
+    reachable,
+    placed_remedies: surveyed ? g.placed_remedies : 0,
+    placed_areas: surveyed ? g.placed_areas : 0,
+  };
 }
 
-export function classifyGates(rows: GateGap[]): SufficiencyResult {
-  return { reachability_note: REACHABILITY_NOTE, gates: rows.map(classifyGate) };
+export function classifyGates(rows: GateGap[], surveyed = false): SufficiencyResult {
+  return {
+    reachability_note: surveyed ? PLACEMENT_NOTE : REACHABILITY_NOTE,
+    surveyed,
+    gates: rows.map((r) => classifyGate(r, surveyed)),
+  };
 }
 
 export async function sufficiency(_req: Request, res: Response): Promise<void> {
@@ -157,9 +233,19 @@ export async function sufficiency(_req: Request, res: Response): Promise<void> {
       group by 1, 2, 3, 4
     ),
     remedies as (
-      select e.affected, e.affected_kind, e.magnitude_min, e.magnitude_max
+      select e.affected, e.affected_kind, e.magnitude_min, e.magnitude_max, r.type as rec_type,
+             coalesce(pl.areas, 0) as placed_areas
       from record_effects e
       join game_records r on r.record_id = e.record_id
+      -- ⚠️ lower(record_id) is MANDATORY. Lua reports record ids lowercase; the corpus stores them
+      -- mixed-case (Potion_Local_Brew_01, ingred_Dae_cursed_emerald_01). Joining raw silently drops
+      -- those items -- no error, no missing-row signal, just a quietly smaller answer. Measured:
+      -- a naive join loses real rows (4 vs 3 on the smallest fixture that can show it).
+      left join lateral (
+        select count(*)::int as areas
+        from item_placements p
+        where p.item_record_id = lower(r.record_id)
+      ) pl on true
       where e.effect_name ilike 'fortify%'
         and e.affected is not null
         -- ⚠️ A permanent (duration 0) SPEL is an innate ABILITY -- Gaenor's Abilities (+500 Luck),
@@ -186,7 +272,19 @@ export async function sufficiency(_req: Request, res: Response): Promise<void> {
       g.gap_p50::int as gap_p50, g.gap_p90::int as gap_p90,
       count(rm.affected) filter (where rm.magnitude_min >= g.gap_p90)::int as reliable,
       count(rm.affected) filter (where rm.magnitude_max >= g.gap_p90)::int as possible,
-      count(rm.affected) filter (where rm.magnitude_min is null)::int      as unknown_magnitude
+      count(rm.affected) filter (where rm.magnitude_min is null)::int      as unknown_magnitude,
+      -- Reachability, restricted to remedies that ACTUALLY CLOSE THE GAP. Counting placements of
+      -- any Fortify item would say "reachable" on the strength of a +5 potion against a 25-point
+      -- gap -- true about the world, and useless about the gate.
+      count(rm.affected) filter (
+        where rm.magnitude_max >= g.gap_p90 and rm.placed_areas > 0
+      )::int as placed_remedies,
+      coalesce(sum(rm.placed_areas) filter (where rm.magnitude_max >= g.gap_p90), 0)::int
+        as placed_areas,
+      -- Only ALCH/INGR can appear in item_placements at all (see GateGap.surveyable_possible).
+      count(rm.affected) filter (
+        where rm.magnitude_max >= g.gap_p90 and rm.rec_type in ('ALCH', 'INGR')
+      )::int as surveyable_possible
     from gates g
     -- affected_kind is load-bearing, not decoration: skill and attribute ids collide across the
     -- two enums, so joining on affected alone would credit a stat with another stat's remedies.
@@ -197,5 +295,14 @@ export async function sufficiency(_req: Request, res: Response): Promise<void> {
     order by g.fails desc
   `);
 
-  res.json(classifyGates(rows.rows as unknown as GateGap[]));
+  // Has a survey ever been ingested? Decides UNKNOWN vs a real reachability answer, and is asked
+  // separately on purpose: inferring it from "did any gate report a placement" would report
+  // NOT_PLACED for every gate on an empty database, which is a finding rather than an absence.
+  const surveyed = (
+    (await db.execute(sql`select count(*)::int as n from world_surveys`)).rows as unknown as [
+      { n: number },
+    ]
+  )[0].n > 0;
+
+  res.json(classifyGates(rows.rows as unknown as GateGap[], surveyed));
 }
