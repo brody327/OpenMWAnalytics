@@ -38,6 +38,23 @@ export interface SurveyManifest {
 export const REQUIRED_FILES = ['morrowind.esm', 'tribunal.esm', 'bloodmoon.esm'] as const;
 
 /**
+ * OpenMW's OWN files, which `core.contentFiles.list` reports alongside content.
+ *
+ * A category distinct from `PERMITTED_EXTRAS`, and worth keeping distinct: these are not part of
+ * "the measured set" (what a player running the mod has) -- they are the ENGINE, present in every
+ * load order no matter how it is configured, and containing no world records at all. `builtin.
+ * omwscripts` is OpenMW's built-in Lua package; it is structurally incapable of placing an object,
+ * so admitting it weakens nothing.
+ *
+ * Found by the guard on the first survey that carried a real load order (2026-07-28) -- a false
+ * positive, and exactly the kind a strict allowlist is supposed to surface rather than swallow.
+ * Waving it through with `--allow-extra` would have worked and would have been wrong: the reason it
+ * is safe has nothing to do with this mod, so encoding it as a per-run flag would have hidden a
+ * permanent fact behind an argument someone must remember.
+ */
+export const ENGINE_FILES = ['builtin.omwscripts'] as const;
+
+/**
  * The measured mod, ITS HARD DEPENDENCIES, and our own scripts. Extended when a different mod is
  * measured.
  *
@@ -67,7 +84,11 @@ export function validateLoadOrder(
   permittedExtras: readonly string[] = PERMITTED_EXTRAS,
 ): LoadOrderVerdict {
   const seen = new Set(loadOrder.map((f) => f.toLowerCase()));
-  const allowed = new Set<string>([...REQUIRED_FILES, ...permittedExtras.map((f) => f.toLowerCase())]);
+  const allowed = new Set<string>([
+    ...REQUIRED_FILES,
+    ...ENGINE_FILES,
+    ...permittedExtras.map((f) => f.toLowerCase()),
+  ]);
 
   const missing = REQUIRED_FILES.filter((f) => !seen.has(f));
   const contaminants = loadOrder.filter((f) => !allowed.has(f.toLowerCase()));

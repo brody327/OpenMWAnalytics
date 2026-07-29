@@ -103,6 +103,29 @@ test('⭐⭐ a real modded load order is REFUSED, and every contaminant is named
   assert.deepEqual(v.contaminants, ['Tamriel_Data.esm', 'RepopulatedMorrowind.ESM']);
 });
 
+test('⭐⭐ the ACTUAL load order the engine reported, verbatim, passes', () => {
+  // Copied from the real survey header (2026-07-28). Note two things the design did not predict:
+  // OpenMW lowercases every name, and it reports `builtin.omwscripts` — its OWN Lua package — as
+  // part of the load order. The guard flagged it, correctly: it is not in the measured set. It is
+  // admitted as an ENGINE file because it carries no world records and appears in every load order
+  // regardless of configuration, so it cannot be the thing that placed an object.
+  const reported = [
+    'builtin.omwscripts',
+    'morrowind.esm',
+    'tribunal.esm',
+    'bloodmoon.esm',
+    'oaab_data.esm',
+    'the contrived case of flordius fastus.omwaddon',
+    'the contrived case of flordius fastus.omwscripts',
+    'omwanalytics.omwscripts',
+    'omwanalytics-survey.omwscripts',
+  ];
+  const v = validateLoadOrder(reported);
+  assert.deepEqual(v.contaminants, []);
+  assert.deepEqual(v.missing, []);
+  assert.equal(v.ok, true);
+});
+
 test("⭐ the CCFF_Testing_Base profile's real load order passes", () => {
   // Verbatim from launcher.cfg after wiring the analytics scripts in (2026-07-28). OAAB_Data.esm
   // is a HARD DEPENDENCY of CCFF (confirmed by the author), so every CCFF player has it and

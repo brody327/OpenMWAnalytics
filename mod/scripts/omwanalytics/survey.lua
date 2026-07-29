@@ -60,16 +60,25 @@ local isExt     = {}
 -- This is the entire payoff. Telemetry says WHERE PLAYERS FAIL, this says WHERE THE REMEDY IS,
 -- and the two only join if both mean the same thing by "area". Raw cell ids would produce a table
 -- that is correct and useless. Cells we cannot name are SKIPPED, exactly as player.lua skips them.
+-- ⚠️ RETURNS (area, IS_EXTERIOR). Note the polarity, because it is the opposite of player.lua's:
+-- `currentArea()` there returns (area, INTERIOR) and its caller reads `local area, interior = ...`.
+-- The first version of this function was copied from it verbatim and the second value named
+-- `exterior`, which inverted `is_exterior` on every one of 6,797 rows in the first real survey.
+-- Nothing else was wrong -- areas, items and counts were all correct -- and the column is a
+-- plausible-looking boolean either way, so it survived until an interior ("Vivec, Miun-Gei:
+-- Enchanter") was seen flagged as exterior. Two functions with the same shape and opposite
+-- polarity is a trap; the fix is to state the polarity in the name and the comment, not to
+-- remember it.
 local function areaOf(cell)
     if not cell then return nil end
     if cell.isExterior then
         local region = cell.region
-        if region and region ~= '' then return region, false end
-        return nil
+        if region and region ~= '' then return region, true end    -- exterior -> region id
+        return nil                                                 -- regionless exterior: skip
     end
     local name = cell.name
-    if name and name ~= '' then return name, true end
-    return nil
+    if name and name ~= '' then return name, false end             -- interior -> cell name
+    return nil                                                     -- unnamed interior: skip
 end
 
 local function tally(area, exterior, recordId, n)
