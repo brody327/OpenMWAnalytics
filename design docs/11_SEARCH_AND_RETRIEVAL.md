@@ -1067,9 +1067,60 @@ DEPENDENCY of CCFF** (confirmed by the author), so it is in `PERMITTED_EXTRAS` r
 `--allow-extra`: the measured set is *what a player running this mod necessarily has*, and a flag
 you must remember to pass is the rot the refusal exists to prevent. Pinned by a test.
 
-▶ **NOT YET RUN.** The tables are deliberately EMPTY — fixture rows were removed rather than left
-sitting in a table that would read as data. Producing a real survey needs a **second OpenMW config**
-containing only `Morrowind.esm` + `Tribunal.esm` + `Bloodmoon.esm` + CCFF + the analytics mod.
+### ✅ RUN + INGESTED 2026-07-28 — 6,797 placements, and three bugs it found on itself
+
+**2,912 cells · 6,797 rows · 957 areas · 371 distinct items · 22,832 instances.** Load order
+recorded, conservation check green. Deterministic — two runs produced byte-identical totals.
+
+⭐ **THE PAYOFF, first real query.** Fortify Personality remedies joined to *where they actually are*:
+
+| remedy | magnitude | areas | instances |
+| --- | --- | --- | --- |
+| **Telvanni Bug Musk** | **40** | 35 | 56 |
+| Kresh Fiber / Green Lichen / Stoneflower Petals | *unknown* (INGR) | 39 / 32 / 15 | 54 / 33 / 29 |
+| Standard / Quality / Exclusive Fortify Personality | 10 / 15 / 20 | 2 / 1 / 1 | **7 total** |
+
+The labelled *potions* barely exist — **7 instances in the entire world**. The remedy genuinely
+available is `ingred_bug_musk_telvanni` at magnitude **40**, in 35 areas. And three of the four
+commonest Personality items carry **no magnitude at all**, which makes the `unknown_magnitude`
+tier load-bearing rather than pedantic — reporting only what we can measure would have said
+"7 instances exist" about a stat the world is actually generous with.
+
+#### Three bugs, each invisible except in the result
+
+1. ⚠️ **`load_order` serialised as `null`.** `core.contentFiles.list` is engine **userdata**, and
+   `json.lua` returned `'null'` for any non-table — collapsing *"I cannot represent this"* into
+   *"this is absent"*. Every other part of the manifest reconciled perfectly. It **failed CLOSED**
+   (ingest refused, 0 rows written). `json.lua` now emits `"<unencodable:<type>>"`: still valid
+   JSON, so it can never break the emit path, but impossible to mistake for a missing field.
+2. ⚠️ **`builtin.omwscripts`.** OpenMW reports its **own** Lua package as part of the load order,
+   and **lowercases every name** — neither predicted. The guard refused it, correctly. Admitted as
+   a new `ENGINE_FILES` category rather than `--allow-extra`, because the reason it is safe (no
+   world records; present in every load order regardless of configuration) is permanent and has
+   nothing to do with the measured mod.
+3. ⚠️⚠️ **`is_exterior` was INVERTED on all 6,797 rows.** `areaOf()` was copied from `player.lua`'s
+   `currentArea()`, which returns `(area, INTERIOR)`. Areas, items and counts were all correct, and
+   the column is a plausible boolean either way — it survived until an interior (*Vivec, Miun-Gei:
+   Enchanter*) was seen flagged exterior. **The rows were DELETED, not patched** with
+   `UPDATE ... NOT is_exterior`: that update would have been provably correct *and* would have left
+   a table whose contents were produced by code that no longer exists — the drift class this
+   project hit twice the same day. Re-running the survey costs ~5 seconds.
+   ⭐ Now checked by something an inverted run cannot satisfy: every exterior area matches
+   `%region%`, and the interior/exterior split is 6,698 rows / 947 named cells vs 99 rows / 10
+   regions.
+
+⚠️ **OPEN — the two universes do not match.** 29 placement rows have no corpus record, **all
+`ab_*` (OAAB_Data)**. `OAAB_Data.esm` is in the SURVEY allowlist (a CCFF hard dependency) but was
+never ingested into the CORPUS, so those placements have no name, type or effects and can never
+contribute a remedy answer. **The survey's universe and the corpus's universe must be the same
+set** — fixing it means re-running the ordered merge across all five plugins (`esmtool.exe` and
+`OAAB_Data.esm` are both on disk).
+
+⚠️ `ToddTest` appears as an area — a developer test cell shipped inside `Morrowind.esm`. Genuine
+data, but noise a mod author should not be shown.
+
+▶ **`reachable` can now stop being `UNKNOWN`** in `/stats/sufficiency` — the data exists; the
+endpoint is not yet wired to it.
 
 ---
 
