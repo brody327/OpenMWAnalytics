@@ -2070,3 +2070,48 @@ the transcript** by grepping `aws.txt`.
 
 ▶ **The habit to build from this: before trusting a green check, ask what a failing world would have
 printed.** If the answer is "the same thing", the check is decoration.
+
+## 2026-07-29 — ops only: credentials rotated, secret-read guard built. NO assessment ran.
+
+Short session, closed deliberately. **Nothing was taught and nothing was assessed**, so the 07-28
+debt carries forward untouched. Recorded so the next session does not mistake a quiet log for a
+settled one.
+
+**Done:** the user rotated the AWS console and Cloudflare passwords that leaked into the 07-28
+transcript, then asked for a structural fix — *"this is the second time and it kills momentum."*
+Built a two-layer guard: `permissions.deny` rules in `.claude/settings.json` covering the read
+tools, and a `PreToolUse` hook (`.claude/hooks/deny-secret-reads.mjs`, 26 tests) covering shell
+commands. CLAUDE.md gained a "Secrets" section as the *why*.
+
+**Learner decision, recorded because it sets the residual risk:** the secrets file **stays** in the
+repo root — layer 1 (eliminate the artefact) was offered and declined. So the protection is a text
+filter, not a wall: an unlisted read verb, or a script that reads the file itself, still gets
+through. Narrower surface than 07-28, not a closed one.
+
+### ⭐ Two more instances of the session-spanning theme — this time in a guard's own tests
+
+1. The hook passed **16/16**, then blocked the **first real command** it saw:
+   `ssh -i omwa-key.pem … | head -5`. The rule was "a read verb anywhere AND a protected filename
+   anywhere"; `head` was reading *ssh's output*, not the key. Every fixture was a single clean
+   pipeline segment, so the suite could not reach the defect.
+   ▶ **New shape of the lesson: in a guard, the ALLOW column is load-bearing.** A guard that denies
+   everything passes every deny case. All eight deny cases were green; the bug was reachable only
+   through an allow case that had not been written.
+2. The next version hard-blocked *any mention* of the secrets filename — and promptly refused to
+   let this very log entry be written, because the entry names the file it describes.
+   ▶ **A guard that stops you documenting it is one you route around.** Now gated on a read verb,
+   plus a separate rule on copy/transmit verbs (relocating a file nothing consumes is never
+   legitimate, and would otherwise walk straight around the read list).
+
+Also fixed mid-edit: `Math.max` over two verb positions picks the *later* one, which would clear a
+protected file sitting after the earlier verb.
+
+### ▶ CARRIED FORWARD — unchanged from 07-28, still the opening agenda
+
+1. **Shrinkage vs `log(attempts)`** — blurred a **third** time. Spiral with a fixture where the two
+   terms point in **opposite** directions; make the learner predict the ordering before running it.
+2. **#1 derived-artefact drift** — still unassessed. Retest on the **friction rollup**, not chunks.
+3. **#5** — landed only on the third representation ⇒ retest **COLD, on a third system.**
+
+Candidate next builds (nothing chosen): Q3.5 read side · a dashboard view for `/stats/sufficiency`
+· 4c LLM insights.

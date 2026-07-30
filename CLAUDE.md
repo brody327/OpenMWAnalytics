@@ -100,6 +100,32 @@ ambiguity, and update the design doc only when the decision is explicitly made.
 
 ---
 
+## Secrets — never read them, and prefer not to have them here
+
+Twice (2026-07-25, 2026-07-28) an agent grepped a secrets file for one value and
+printed *live credentials* into the session transcript. The only control in place
+was "the agent chooses not to", which is not a control. There are now three layers,
+weakest last:
+
+1. **Nothing that isn't consumed should live in the repo tree.** A file that isn't
+   here cannot be read by a future recursive sweep.
+2. **Enforcement** — `.claude/settings.json` denies the read tools on `aws.txt`,
+   `**/.env`, `**/*.pem`, `**/*.key`; the `PreToolUse` hook
+   `.claude/hooks/deny-secret-reads.mjs` blocks *shell* commands that would print
+   them. Tests: `node .claude/hooks/deny-secret-reads.test.mjs`.
+3. **This rule.** It is the layer that already failed twice. Treat it as the *why*,
+   not the guard.
+
+The hook deliberately allows **passing a protected path to a program that consumes
+it** (`ssh -i omwa-key.pem`, `--env-file api/.env`) and blocks only printing its
+contents. A guard that breaks the documented prod-access workflow gets switched off.
+
+▶ **To get the prod `DATABASE_URL`, read the k8s secret — never a local file:**
+`ssh -i omwa-key.pem ubuntu@16.58.59.201 "sudo kubectl get secret omwa-api-secrets -o jsonpath='{.data.DATABASE_URL}' | base64 -d"`.
+Print only host/port/db/user. `DATABASE_SSL=true` is required against RDS.
+
+---
+
 ## Reference environment
 
 - OpenMW 0.51 offline Lua API docs: `H:\OpenMW 0.51.0\Docs\` (prefer over
