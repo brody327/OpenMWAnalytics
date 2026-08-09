@@ -180,13 +180,58 @@ jobs:
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
           set -euo pipefail
+
+          # ── PREFLIGHT ────────────────────────────────────────────────────────────────────────
+          # Added after the first real deploy failed in 5 seconds with NO OUTPUT. The original
+          # step piped ssh-keyscan's stderr to /dev/null, so the one message that would have
+          # explained the failure was the one thing thrown away. Every check below exists to turn
+          # a bare `exit 1` into a sentence naming what to go fix.
+          #
+          # ⚠️ None of these print secret material. `ssh-keygen -y` writes the PUBLIC key and is
+          # redirected to /dev/null; only its exit status is used.
+
+          if [ -z "${DEPLOY_HOST:-}" ]; then
+            echo "::error::DEPLOY_HOST secret is empty or missing. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          if [ -z "${DEPLOY_SSH_KEY:-}" ]; then
+            echo "::error::DEPLOY_SSH_KEY secret is empty or missing."
+            exit 1
+          fi
+
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+
+          # A truncated paste is the commonest way this secret is wrong, and ssh's own complaint
+          # about it ("invalid format") is easy to misread as a permissions problem.
+          if ! ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            echo "::error::DEPLOY_SSH_KEY is not a valid private key. Paste the WHOLE file including the -----BEGIN and -----END lines."
+            exit 1
+          fi
+          echo "key parses OK"
+
+          # Is port 22 even reachable from this runner? This is the check whose absence made the
+          # first failure unreadable: the EC2 security group may allow SSH only from the
+          # maintainer's home IP, in which case everything above is fine and the connection simply
+          # never happens.
+          if ! timeout 10 bash -c "cat < /dev/null > /dev/tcp/${DEPLOY_HOST}/22" 2>/dev/null; then
+            echo "::error::Cannot reach ${DEPLOY_HOST}:22 from this runner. Either the EC2 instance is stopped, or its security group does not allow SSH from GitHub-hosted runners (their IPs are not fixed)."
+            exit 1
+          fi
+          echo "port 22 reachable"
+
           # TOFU: we trust whatever host key answers right now. This protects the transport but
           # not against a MITM on the runner's egress. The stronger form pins the host key in a
           # DEPLOY_KNOWN_HOSTS secret; not done, and called out rather than left to look solid.
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          #
+          # stderr is NO LONGER discarded, and -T bounds the wait explicitly rather than relying
+          # on the 5s default that made the original failure look like an unexplained hang.
+          if ! ssh-keyscan -T 10 -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts; then
+            echo "::error::ssh-keyscan could not retrieve a host key from ${DEPLOY_HOST}."
+            exit 1
+          fi
+          echo "host key retrieved"
 
           # Pin BOTH containers to the same immutable tag. The initContainer runs the schema
           # migrations and the app container runs the code that depends on them; if they could
@@ -196,7 +241,13 @@ jobs:
           # `kubectl set image` mutates the pod TEMPLATE, so k8s sees a genuinely changed spec
           # and rolls out on its own. That is the actual fix: repointing a mutable :latest never
           # changed the spec, so the control loop had nothing to reconcile and did nothing.
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ubuntu@$DEPLOY_HOST" \
+          # BatchMode=yes so a key the server rejects fails immediately with a readable error
+          # instead of blocking on an interactive password prompt until the job times out.
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            "ubuntu@$DEPLOY_HOST" \
             "set -euo pipefail
              sudo kubectl set image deployment/omwa-api \
                api=${{ env.IMAGE }}:$IMAGE_TAG \
