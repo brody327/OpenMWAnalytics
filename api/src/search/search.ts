@@ -117,24 +117,65 @@ export interface SearchResult {
   results: SearchHit[];
 }
 
-export async function searchCorpus(query: string, limit = 10): Promise<SearchResult> {
+export interface SearchOptions {
+  /**
+   * Restrict candidates to these `game_records.type` values (e.g. ['INFO','BOOK']).
+   *
+   * ⭐ APPLIED INSIDE THE CANDIDATE CTEs, NOT AFTERWARDS -- and that distinction is the whole
+   * reason this option exists. Phase 4c originally over-fetched 40 hits and filtered to narrative
+   * types in TypeScript. Measured in prod 2026-08-09:
+   *
+   *     "how can I improve my strength..."   ->  0 narrative of 50   (10 ALCH, 12 ENCH, 28 SPEL)
+   *     "...security..."                     -> 33 narrative of 50
+   *     "...personality..."                  -> 17 narrative of 50
+   *
+   * Nothing was broken; `strength` simply has so many Fortify Strength records that they fill the
+   * candidate window before a single line of dialogue appears. Post-filtering cannot recover a
+   * document the candidate set never contained -- it can only ever shrink a page, and for one
+   * whole class of query it shrank it to nothing. The insight generated from that empty set was
+   * correct and useless.
+   */
+  types?: string[];
+}
+
+export async function searchCorpus(
+  query: string,
+  limit = 10,
+  opts: SearchOptions = {},
+): Promise<SearchResult> {
   const t0 = Date.now();
   const vector = await embedQuery(query);
   const k = Math.min(Math.max(limit, 1), MAX_LIMIT);
+  const types = opts.types;
+
+  // An IN list of individually-bound values, not `= ANY($1)`.
+  //
+  // ⚠️ `= ANY(${array})` looks right and fails at runtime: drizzle binds the JS array as a single
+  // scalar parameter, and Postgres rejects it in `make_scalar_array_op` because ANY's right-hand
+  // side must be an actual array. `sql.join` expands to `IN ($1, $2)` with one placeholder per
+  // value, which is both valid and still fully parameterised -- `types` is a module constant
+  // today, but a filter that reaches SQL by string concatenation is one refactor away from being
+  // request input.
+  const typeList = types ? sql.join(types.map((t) => sql`${t}`), sql`, `) : sql``;
+  const typeFilter = types ? sql`AND r.type IN (${typeList})` : sql``;
+  const typeJoin = types ? sql`JOIN game_records r ON r.record_id = c.record_id` : sql``;
 
   // The vector half is a separate CTE rather than a nullable parameter: `embedding <=> NULL`
   // would leave the planner deciding what to do with an index scan over a null probe. An empty
   // CTE is unambiguous, and FULL OUTER JOIN handles the degenerate side for free.
   const vecCte = vector
-    ? sql`SELECT chunk_id, embedding <=> ${JSON.stringify(vector)}::vector AS d
-          FROM game_chunks ORDER BY d LIMIT ${CANDIDATE_DEPTH}`
+    ? sql`SELECT c.chunk_id, c.embedding <=> ${JSON.stringify(vector)}::vector AS d
+          FROM game_chunks c ${typeJoin}
+          ${types ? sql`WHERE r.type IN (${typeList})` : sql``}
+          ORDER BY d LIMIT ${CANDIDATE_DEPTH}`
     : sql`SELECT NULL::text AS chunk_id, NULL::float8 AS d WHERE false`;
 
   const run = async (tx: typeof db) => tx.execute(sql`
     WITH lex AS (
-      SELECT chunk_id, ts_rank(tsv, websearch_to_tsquery('english', ${query})) AS s
-      FROM game_chunks
-      WHERE tsv @@ websearch_to_tsquery('english', ${query})
+      SELECT c.chunk_id, ts_rank(c.tsv, websearch_to_tsquery('english', ${query})) AS s
+      FROM game_chunks c ${typeJoin}
+      WHERE c.tsv @@ websearch_to_tsquery('english', ${query})
+      ${typeFilter}
       ORDER BY s DESC
       LIMIT ${CANDIDATE_DEPTH}
     ),
@@ -184,6 +225,27 @@ export async function searchCorpus(query: string, limit = 10): Promise<SearchRes
         // sql.raw, because SET does not accept bind parameters ("syntax error at or near $1").
         // Safe here and only here: EF_SEARCH is a module constant, never request input.
         await tx.execute(sql.raw(`SET LOCAL hnsw.ef_search = ${EF_SEARCH}`));
+
+        // ⭐⭐ ITERATIVE INDEX SCAN — required whenever a filter accompanies the ANN search, and
+        // the reason a filtered vector query is not just "add a WHERE clause".
+        //
+        // An HNSW scan walks the graph and returns its ef_search best neighbours, and only THEN
+        // does the filter apply. With a selective predicate most of those get discarded, so the
+        // CTE quietly yields far fewer than its LIMIT -- the same "too few rows" outcome as
+        // filtering in TypeScript, just moved into the database. Postgres reports no error; the
+        // page is simply short, which is indistinguishable from "the corpus has little to say".
+        //
+        // `relaxed_order` lets pgvector keep resuming the scan until it has enough rows that
+        // PASS the filter. Relaxed rather than strict because RRF re-ranks everything downstream
+        // anyway -- paying for a strict global ordering that the fusion step immediately discards
+        // would be buying a guarantee we then throw away.
+        //
+        // Available because pgvector is 0.8.2 on RDS / 0.8.5 local (11); iterative scans arrived
+        // in 0.8.0. Scoped to this transaction, and only set when a filter is actually present.
+        if (types) {
+          await tx.execute(sql.raw(`SET LOCAL hnsw.iterative_scan = relaxed_order`));
+        }
+
         return run(tx as unknown as typeof db);
       })
     : await run(db);

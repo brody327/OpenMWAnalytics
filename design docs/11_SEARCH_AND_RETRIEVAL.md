@@ -1229,3 +1229,55 @@ found only because an unrelated merge re-derived the hashes and 2,000 of them di
 > guard existed; here, nothing was watching.
 > ▶ **Rule: a change to `chunk.ts` requires a re-ingest everywhere, and that is now the only way to
 > know.** `verify-corpus` compares records and effects, **not chunk text** — closing that is open work.
+
+## §15 — Filtered retrieval, and why post-filtering was the wrong shape (2026-08-09)
+
+Phase 4c needs *prose a player can read* (INFO/BOOK), not effect definitions. The first
+implementation over-fetched 40 hits and filtered to narrative types in TypeScript. Measured
+against prod:
+
+| situational query | narrative hits (of 50) |
+| --- | --- |
+| `"...improve my strength..."` | **0** — 10 ALCH, 12 ENCH, 28 SPEL |
+| `"...improve my security..."` | 33 |
+| `"...improve my personality..."` | 17 |
+
+Nothing was broken. `strength` simply has so many Fortify Strength records that they fill the
+entire candidate window before one line of dialogue appears.
+
+⭐ **Post-filtering cannot recover a document the candidate set never contained.** It can only
+shrink a page — and for a whole class of query it shrank it to nothing. The insight generated from
+that empty set was honest (`UNCLEAR`) and useless, which is the *good* failure but still a failure.
+
+### The fix, and the pgvector wrinkle that makes it non-trivial
+
+`searchCorpus` now takes `types?: string[]`, applied **inside both candidate CTEs**. The lexical
+half is ordinary SQL. The vector half is not:
+
+> An HNSW scan walks the graph, returns its `ef_search` best neighbours, and only **then** applies
+> the filter. With a selective predicate most get discarded, so the CTE quietly yields far fewer
+> than its `LIMIT` — the same "too few rows" outcome as filtering in TypeScript, relocated into the
+> database. Postgres reports nothing; the page is just short.
+
+`SET LOCAL hnsw.iterative_scan = relaxed_order` makes pgvector resume the scan until enough rows
+**pass the filter**. Relaxed rather than strict because RRF re-ranks everything downstream anyway —
+paying for a strict global ordering the fusion step immediately discards buys nothing. Available
+because pgvector is 0.8.2 on RDS / 0.8.5 local (§5); iterative scans landed in 0.8.0. Set only when
+a filter is present, and scoped to the transaction — the same discipline as `ef_search`, and for
+the same reason `SET LOCAL` outside a transaction silently no-ops (§10a).
+
+⚠️ **`= ANY(${array})` does not work here.** Drizzle binds a JS array as one scalar parameter and
+Postgres rejects it in `make_scalar_array_op`. `sql.join` expands to `IN ($1, $2)` — one
+placeholder per value, still fully parameterised.
+
+### Measured, both directions (lexical half, local corpus)
+
+| query | no filter | with filter |
+| --- | --- | --- |
+| `strength` | 30 hits, **9 narrative** | 30 hits, **30 narrative** (22 BOOK, 8 INFO) |
+| `sujamma` | 30 hits, 29 narrative | 30 hits, 30 narrative |
+
+⚠️ Lexical only — the local `OPENAI_API_KEY` was unusable at the time, so the vector half and
+`iterative_scan` are **verified in prod, not locally**. A "0 hits / all narrative ✓" result during
+testing was rejected as a vacuous pass: an empty set satisfies "every hit is narrative" trivially,
+which is a check that cannot fail.

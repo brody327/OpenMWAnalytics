@@ -70,7 +70,7 @@ const CANDIDATE_PASSAGES = 40;
  * mod author can actually edit to signpost something, which makes them the only ones on which the
  * question "does the text point a player here?" is answerable at all.
  */
-const NARRATIVE_TYPES = new Set(['INFO', 'BOOK']);
+const NARRATIVE_TYPES = ['INFO', 'BOOK'];
 
 /**
  * What identifies ONE gate.
@@ -162,8 +162,11 @@ async function retrievePassages(
   remedies: EvidenceRemedy[],
 ): Promise<EvidencePassage[]> {
   const remedyIds = new Set(remedies.map((r) => r.record_id.toLowerCase()));
-  const keep = (h: { type: string; record_id: string }) =>
-    NARRATIVE_TYPES.has(h.type) && !remedyIds.has(h.record_id.toLowerCase());
+  // The TYPE filter now happens in SQL (searchCorpus `types`), so this only excludes the remedy
+  // records themselves. Belt-and-braces: a remedy is ALCH/INGR/SPEL/ENCH and can no longer reach
+  // a narrative-filtered result set at all — but the guard is one line and survives someone
+  // widening NARRATIVE_TYPES later without remembering why the exclusion existed.
+  const keep = (h: { record_id: string }) => !remedyIds.has(h.record_id.toLowerCase());
 
   // ⭐ TWO PASSES, AND THE SECOND CANNOT BE DROPPED WITHOUT CHANGING THE QUESTION.
   //
@@ -175,9 +178,11 @@ async function retrievePassages(
   // context "no passage names the ring" is indistinguishable from "we searched for the wrong
   // thing". Running either alone biases the verdict in a direction that looks like a finding.
   const [situational, byName] = await Promise.all([
-    searchCorpus(situationQuery(stat), CANDIDATE_PASSAGES),
+    searchCorpus(situationQuery(stat), CANDIDATE_PASSAGES, { types: NARRATIVE_TYPES }),
     remedies.length > 0
-      ? searchCorpus(remedies.map((r) => r.name).join(' '), CANDIDATE_PASSAGES)
+      ? searchCorpus(remedies.map((r) => r.name).join(' '), CANDIDATE_PASSAGES, {
+          types: NARRATIVE_TYPES,
+        })
       : Promise.resolve({ results: [] as Awaited<ReturnType<typeof searchCorpus>>['results'] }),
   ]);
 
