@@ -575,3 +575,23 @@ for (const [k, v] of Object.entries(lock.packages))
 same dependency set. Patching the lockfile makes CI pass; it does not make the two agree. The real
 fix is to build the image from the repo root against the workspace lockfile — deliberately not done
 here, because it is a bigger change than unblocking a deploy warranted.
+
+### ⚠️⚠️ …and then the fix did not build, because the path filter excluded it
+
+Immediately after the lockfile fix above was pushed: **no Actions run appeared at all.** Not a
+failed run — no run.
+
+The trigger was `paths: ['api/**', '.github/workflows/build-api.yml']`, and the fixing commit
+touched only `package-lock.json` and `design docs/`. Neither matched. **The fix for a CI failure
+lived in a file the CI trigger ignored, so it could never build itself.**
+
+⭐ **The failure mode is SILENCE, and that is what makes it worth writing down.** Nothing errored.
+From the Actions tab, "no run was queued" and "nothing needed doing" are indistinguishable. This is
+the same family as the mutable-tag bug at the top of this section: the system did exactly what it
+was configured to do, and the configuration was pointed at the wrong thing. `/version` returning
+404 six minutes after a push was the observation that separated the two — a *deployed* fix would
+have flipped it.
+
+**Rule now written into the workflow:** the path list is *"what the API image is built from"*, not
+*"the `api/` folder"*. `package-lock.json` (the tree the test job installs from) and `package.json`
+(workspace definitions) are both build inputs and are now included.

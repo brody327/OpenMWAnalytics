@@ -15,8 +15,24 @@ name: build-api
 on:
   push:
     branches: [main]
+    # ⚠️ THIS LIST IS "WHAT THE API IMAGE IS BUILT FROM", NOT "THE api/ FOLDER".
+    #
+    # It originally said `api/**` only, and that omitted the ROOT LOCKFILE — which the test job
+    # installs from. The consequence was found the hard way on 2026-08-09: a commit that fixed a CI
+    # failure by editing `package-lock.json` triggered NO RUN AT ALL, so the fix could never build
+    # itself. Nothing errored; the Actions tab was simply empty.
+    #
+    # That silence is the failure mode to notice. A path filter that omits a build input doesn't
+    # warn — "no run was queued" and "nothing needed doing" are indistinguishable from outside,
+    # which puts it in the same family as a mutable tag that never triggers a rollout: the system
+    # is working exactly as configured, and the configuration is pointed at the wrong thing.
+    #
+    # Rule for editing this list: if changing a file can change what ends up in the image or what
+    # the tests run against, it belongs here.
     paths:
       - 'api/**'
+      - 'package-lock.json'          # the tree the test job installs from
+      - 'package.json'               # workspace definitions
       - '.github/workflows/build-api.yml'
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
