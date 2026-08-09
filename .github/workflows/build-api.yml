@@ -38,6 +38,10 @@ on:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/omwanalytics-api
+  # Not a secret — an AWS region is public information, and hardcoding it here beats a repo
+  # variable nobody can see when reading the workflow. It cost a debugging session on 2026-08-09
+  # when the EC2 console opened on the default us-east-1 and showed no instances (09 §2).
+  AWS_REGION: us-east-2
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -166,105 +170,116 @@ jobs:
     runs-on: ubuntu-latest
     # Guard against a manual workflow_dispatch from a feature branch quietly shipping to prod.
     if: github.ref == 'refs/heads/main'
-    # ⚠️ ACCEPTED RISK, recorded deliberately (design docs 09): DEPLOY_SSH_KEY is an
-    # unrestricted key for ubuntu@<host>, so anyone who can push to main has a shell on the
-    # production box. Single-maintainer repo, and secrets are not exposed to fork PRs. The
-    # hardened form is a dedicated keypair with a forced command in authorized_keys
-    # (command="/usr/local/bin/omwa-deploy",no-pty,...), which reduces a leaked secret from
-    # "root on the host" to "can deploy an image". Considered and declined for setup cost.
+    permissions:
+      # ⭐ REQUIRED FOR OIDC. This lets the job mint a short-lived GitHub identity token that AWS
+      # exchanges for temporary credentials. Without it, configure-aws-credentials fails with a
+      # confusing "Credentials could not be loaded" -- the token endpoint simply is not there.
+      id-token: write
+      contents: read
     steps:
+      # ── HOW THIS REACHES THE BOX, AND WHY THERE IS NO SSH HERE ────────────────────────────────
+      #
+      # The first attempt used SSH and could not connect: the security group allowed port 22 from
+      # a single /32 (the maintainer's home IP) and GitHub-hosted runners have rotating addresses.
+      # That was not a misconfiguration -- the restriction was doing its job. The genuine choice
+      # was to WIDEN THE NETWORK (open 22 to the world, losing a layer of defence) or to CHANGE
+      # THE CHANNEL so nothing needs widening. This is the second.
+      #
+      # SSM inverts the direction of travel: the agent on the instance polls AWS outbound, so
+      # there is NO INBOUND PORT AT ALL and 22 stays locked to one /32. Paired with OIDC there is
+      # also no long-lived credential in this repo -- DEPLOY_SSH_KEY, a standing key to a
+      # production box, is deleted rather than merely well-guarded.
+      #
+      # What replaced it: a role AWS issues credentials to only when the caller proves it is a
+      # push to main of this repository, scoped to ssm:SendCommand on ONE instance and ONE
+      # document. A leaked GitHub token cannot open a shell; it can deploy an image.
+      - name: Assume the deploy role (OIDC — nothing stored in this repo)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: omwa-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Roll out ${{ needs.build-and-push.outputs.image_tag }}
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+          IMAGE_REPO: ${{ env.IMAGE }}
         run: |
           set -euo pipefail
 
-          # ── PREFLIGHT ────────────────────────────────────────────────────────────────────────
-          # Added after the first real deploy failed in 5 seconds with NO OUTPUT. The original
-          # step piped ssh-keyscan's stderr to /dev/null, so the one message that would have
-          # explained the failure was the one thing thrown away. Every check below exists to turn
-          # a bare `exit 1` into a sentence naming what to go fix.
-          #
-          # ⚠️ None of these print secret material. `ssh-keygen -y` writes the PUBLIC key and is
-          # redirected to /dev/null; only its exit status is used.
-
-          if [ -z "${DEPLOY_HOST:-}" ]; then
-            echo "::error::DEPLOY_HOST secret is empty or missing. Add it under Settings -> Secrets and variables -> Actions."
+          if [ -z "${INSTANCE_ID:-}" ]; then
+            echo "::error::EC2_INSTANCE_ID secret is empty or missing."
             exit 1
           fi
-          if [ -z "${DEPLOY_SSH_KEY:-}" ]; then
-            echo "::error::DEPLOY_SSH_KEY secret is empty or missing."
+          IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
+
+          # Is the agent actually registered? An instance with no IAM instance profile is INVISIBLE
+          # to SSM, and send-command then fails with a generic InvalidInstanceId that reads like a
+          # typo in the instance id. Asking first turns that into a sentence naming the real cause.
+          ping=$(aws ssm describe-instance-information \
+                   --filters "Key=InstanceIds,Values=${INSTANCE_ID}" \
+                   --query 'InstanceInformationList[0].PingStatus' \
+                   --output text 2>/dev/null || echo None)
+          if [ "$ping" != "Online" ]; then
+            echo "::error::Instance ${INSTANCE_ID} is not registered with SSM (PingStatus=${ping}). It needs an IAM instance profile containing AmazonSSMManagedInstanceCore; after attaching one the agent can take a few minutes, or restart it with: sudo snap restart amazon-ssm-agent"
+            exit 1
+          fi
+          echo "SSM agent Online"
+
+          # Parameters go in a FILE, not inline. These commands contain quotes and shell
+          # metacharacters, and threading them through --parameters key=value is the kind of
+          # quoting that works until a tag contains something unexpected and then fails obscurely.
+          cat > /tmp/ssm-params.json <<JSON
+          {
+            "commands": [
+              "set -euo pipefail",
+              "kubectl set image deployment/omwa-api api=${IMAGE} migrate=${IMAGE}",
+              "kubectl rollout status deployment/omwa-api --timeout=180s"
+            ]
+          }
+          JSON
+
+          # AWS-RunShellScript runs as root, so there is no sudo here -- which is also what lets
+          # kubectl read k3s.yaml (0600, root-only). Verified that kubectl resolves on the box even
+          # in a minimal environment, so SSM's shell will find it.
+          cmd_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${IMAGE_TAG}" \
+            --parameters file:///tmp/ssm-params.json \
+            --query 'Command.CommandId' --output text)
+          echo "SSM command: $cmd_id"
+
+          # ⚠️ send-command is ASYNCHRONOUS -- it returns as soon as the command is QUEUED. A job
+          # that stopped here would report success for a rollout that had not started, let alone
+          # finished: the same "green means queued, not done" trap as pushing a tag nothing pulls.
+          status=Pending
+          for _ in $(seq 1 60); do
+            status=$(aws ssm get-command-invocation \
+                       --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+                       --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in
+              Success|Failed|Cancelled|TimedOut) break ;;
+            esac
+            sleep 5
+          done
+
+          echo "--- remote stdout ---"
+          aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent --output text || true
+          err=$(aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+                  --query StandardErrorContent --output text 2>/dev/null || echo '')
+          if [ -n "$err" ] && [ "$err" != "None" ]; then
+            echo "--- remote stderr ---"
+            echo "$err"
+          fi
+
+          if [ "$status" != "Success" ]; then
+            echo "::error::SSM command finished with status ${status}"
             exit 1
           fi
 
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-          # A truncated paste is the commonest way this secret is wrong, and ssh's own complaint
-          # about it ("invalid format") is easy to misread as a permissions problem.
-          if ! ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
-            echo "::error::DEPLOY_SSH_KEY is not a valid private key. Paste the WHOLE file including the -----BEGIN and -----END lines."
-            exit 1
-          fi
-          echo "key parses OK"
-
-          # Is port 22 even reachable from this runner? This is the check whose absence made the
-          # first failure unreadable: the EC2 security group may allow SSH only from the
-          # maintainer's home IP, in which case everything above is fine and the connection simply
-          # never happens.
-          if ! timeout 10 bash -c "cat < /dev/null > /dev/tcp/${DEPLOY_HOST}/22" 2>/dev/null; then
-            echo "::error::Cannot reach ${DEPLOY_HOST}:22 from this runner. Either the EC2 instance is stopped, or its security group does not allow SSH from GitHub-hosted runners (their IPs are not fixed)."
-            exit 1
-          fi
-          echo "port 22 reachable"
-
-          # TOFU: we trust whatever host key answers right now. This protects the transport but
-          # not against a MITM on the runner's egress. The stronger form pins the host key in a
-          # DEPLOY_KNOWN_HOSTS secret; not done, and called out rather than left to look solid.
-          #
-          # stderr is NO LONGER discarded, and -T bounds the wait explicitly rather than relying
-          # on the 5s default that made the original failure look like an unexplained hang.
-          if ! ssh-keyscan -T 10 -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts; then
-            echo "::error::ssh-keyscan could not retrieve a host key from ${DEPLOY_HOST}."
-            exit 1
-          fi
-          echo "host key retrieved"
-
-          # Pin BOTH containers to the same immutable tag. The initContainer runs the schema
-          # migrations and the app container runs the code that depends on them; if they could
-          # differ, a rollout could migrate to one commit's schema and serve another's code --
-          # which is the 2026-07-22 production 500 all over again, from the other direction.
-          #
-          # `kubectl set image` mutates the pod TEMPLATE, so k8s sees a genuinely changed spec
-          # and rolls out on its own. That is the actual fix: repointing a mutable :latest never
-          # changed the spec, so the control loop had nothing to reconcile and did nothing.
-          # BatchMode=yes so a key the server rejects fails immediately with a readable error
-          # instead of blocking on an interactive password prompt until the job times out.
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=yes \
-            -o BatchMode=yes \
-            -o ConnectTimeout=15 \
-            "ubuntu@$DEPLOY_HOST" \
-            "set -euo pipefail
-             sudo kubectl set image deployment/omwa-api \
-               api=${{ env.IMAGE }}:$IMAGE_TAG \
-               migrate=${{ env.IMAGE }}:$IMAGE_TAG
-             sudo kubectl rollout status deployment/omwa-api --timeout=180s"
-
-      # ⭐ THE CHECK THAT A STALE POD CANNOT PASS.
-      #
-      # Everything above can succeed while production still serves old code -- that is exactly
-      # what happened twice. `rollout status` proves pods reached Ready, and Ready is decided by
-      # /health, which returns {ok:true} for ANY build. So the deploy is not verified until we
-      # observe something only the NEW image can emit: its own commit sha, baked in at docker
-      # build time (api/Dockerfile ARG GIT_SHA), fetched through the PUBLIC ingress so the path
-      # under test is the one users take -- DNS, Traefik, Service, pod.
-      #
-      # A pod running last week's image cannot return this week's sha. There is no way to pass
-      # this check while broken, which is the property /health lacks.
       - name: Verify the ingress is serving this commit
         run: |
           set -uo pipefail

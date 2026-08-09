@@ -608,3 +608,107 @@ have flipped it.
 **Rule now written into the workflow:** the path list is *"what the API image is built from"*, not
 *"the `api/` folder"*. `package-lock.json` (the tree the test job installs from) and `package.json`
 (workspace definitions) are both build inputs and are now included.
+
+### ⭐⭐ §11 — Deploying over SSM instead of SSH (2026-08-09)
+
+The SSH deploy never worked, and the reason was not a bug: **the security group allowed port 22
+from a single `/32`** (the maintainer's home IP), and GitHub-hosted runners have rotating
+addresses. The restriction was doing exactly what it was for.
+
+That framing is the useful part. There is no configuration in which CI reaches the box *and* only
+one IP can reach it — so the choice was to **widen the network** or **change the channel**:
+
+| | Trade |
+| --- | --- |
+| Open 22 to `0.0.0.0/0` | 2 minutes. Password auth is off, so the key becomes the sole control — it deletes a layer of defence-in-depth that currently exists |
+| Allow GitHub's Actions IP ranges | Sounds right, is impractical: thousands of CIDRs that churn, against a default 60-rule limit per security group |
+| **AWS SSM Session Manager (chosen)** | The agent polls **outbound**, so there is **no inbound port at all** and 22 stays locked to one `/32` |
+
+Paired with **GitHub OIDC** it also removes the *other* criticism of the original design: there is
+no long-lived credential in the repo. `DEPLOY_SSH_KEY` — a standing key to a production box, whose
+risk this doc explicitly accepted — is **deleted**, not merely guarded. A leaked GitHub token now
+buys `ssm:SendCommand` on one instance with one document. It cannot open a shell.
+
+⭐ **The agent was already running.** Ubuntu AMIs ship `amazon-ssm-agent` as a snap, active. The
+only thing missing was an **IAM instance profile** — without one the agent cannot register, and the
+instance is simply invisible to SSM.
+
+#### Setup — the four things, once
+
+**1. Let the instance talk to SSM.** IAM → Roles → Create role → *AWS service* → **EC2** → attach
+the AWS-managed **`AmazonSSMManagedInstanceCore`** → name it `omwa-ec2-ssm`. Then EC2 → the
+instance → Actions → Security → **Modify IAM role** → select it.
+
+Registration takes a few minutes; force it with `sudo snap restart amazon-ssm-agent`. Verify in
+**Systems Manager → Fleet Manager** — the instance appears, or it did not work.
+
+**2. Trust GitHub's OIDC issuer.** IAM → Identity providers → Add provider → **OpenID Connect**:
+
+```
+Provider URL: https://token.actions.githubusercontent.com
+Audience:     sts.amazonaws.com
+```
+
+**3. The deploy role.** IAM → Roles → Create role → **Web identity** → that provider, audience
+`sts.amazonaws.com`. Name it `omwa-github-deploy`.
+
+Trust policy — **the `sub` condition is the security boundary.** It is what makes the role
+assumable only by a push to `main` of this repository, and not by any other repo, branch, or fork:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com" },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": "repo:<OWNER>/<REPO>:ref:refs/heads/main"
+      }
+    }
+  }]
+}
+```
+
+Permissions policy — `SendCommand` is scoped to **one instance and one document**; the two read
+actions take `"*"` because SSM does not support resource-level permissions on them:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ec2:us-east-2:<ACCOUNT_ID>:instance/<INSTANCE_ID>",
+        "arn:aws:ssm:us-east-2::document/AWS-RunShellScript"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["ssm:GetCommandInvocation", "ssm:DescribeInstanceInformation"],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+**4. GitHub secrets.** Add `AWS_DEPLOY_ROLE_ARN` and `EC2_INSTANCE_ID`; **delete `DEPLOY_SSH_KEY`
+and `DEPLOY_HOST`** — leaving a standing production key in a repo that no longer uses it is worse
+than never having had one, because nothing will ever fail to remind you it is there.
+
+#### Two traps the workflow guards against explicitly
+
+- **`permissions: id-token: write`** on the job. Without it the runner cannot mint the OIDC token
+  and `configure-aws-credentials` fails with "Credentials could not be loaded" — which reads like a
+  bad role ARN and is not.
+- **`send-command` is ASYNCHRONOUS.** It returns as soon as the command is *queued*. A job that
+  stopped there would go green for a rollout that had not started — the same "queued is not done"
+  trap as pushing an image tag nothing pulls. The step polls `get-command-invocation` to a terminal
+  status and prints the remote stdout/stderr before deciding.
+
+And it still ends in the check that cannot be faked: `/version` fetched through the public ingress
+must equal the commit that was just built.
