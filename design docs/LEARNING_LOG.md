@@ -2228,3 +2228,62 @@ caller had not asked about. Every DB-free test stayed green because the fixture 
 The three carried items (shrinkage vs `log`, derived-artefact drift on the friction rollup, and a
 cold retest of "a check that cannot pass under the failure") are **still unasked**. They have now
 carried across three sessions.
+
+### 2026-08-09 (part 2) — the deploy chain: FIVE failures, no two alike
+
+Getting CI to deploy took five rounds. Recorded together because the *pattern* is the lesson: each
+failure was a different layer, and each was only reachable once the previous fix made it visible.
+
+| # | Symptom | Cause | Why it was hard to see |
+| --- | --- | --- | --- |
+| 1 | `Unable to resolve @typescript/typescript-linux-x64` | lockfile generated on Windows records only the win32 platform binary (TS 7 is the Go port) | the Docker build never used the lockfile, so it had never failed |
+| 2 | **No Actions run at all** | trigger `paths:` omitted `package-lock.json` — the fix for #1 lived in a file the trigger ignored | silence. "No run queued" and "nothing needed doing" look identical |
+| 3 | deploy exits 1 in 5s, no output | security group allows :22 from one /32; runners rotate IPs | I had piped `ssh-keyscan`'s stderr to `/dev/null` |
+| 4 | `Not authorized to perform sts:AssumeRoleWithWebIdentity` | GitHub's OIDC `sub` carries **immutable IDs** (`brody327@47648714/...`), not the documented `repo:OWNER/REPO` | policy, casing, provider and audience were all verifiably correct |
+| 5 | `set: Illegal option -o pipefail` | SSM `AWS-RunShellScript` runs `/bin/sh` = **dash**, not bash | only appears once a command actually reaches the box |
+
+⭐⭐ **The through-line, and it is the same one as the whole project: when two things must match and
+one of them is invisible, inspecting the visible one cannot find the bug.** #4 survived three
+careful readings of a correct policy. It fell in one run once the workflow **printed the claims it
+was presenting**. #3 was unreadable for the same reason in reverse — I had thrown the message away.
+
+▶ **Habit to keep:** the claims-printing step stays in the workflow permanently. One second per
+run, and it converts an entire class of auth failure from archaeology into a diff.
+
+⚠️ **Three of the five were mine, and two of those were the same mistake** (`2>/dev/null` on a
+diagnostic; a `git show` whose error I also suppressed, which produced a confident false "the step
+isn't deployed"). Discarding stderr to keep output tidy has now cost more time in this project than
+any bug it ever hid.
+
+### ✅ 4c IS LIVE AND PRODUCED A REAL FINDING
+
+`ccff_attic_vent_in:open` (strength@40, gap 20, 14 reliable remedies) →
+**`remedy_exists` + `NOT_SIGNPOSTED`**: the content exists, the text never points at it, so the fix
+is one hint line rather than new authoring. Approved and rendering publicly.
+
+⭐ **The first generation was honest and useless, and that mattered.** Retrieval handed it ONE
+passage — an internal dev marker (`EMIL -- BLOODMOON GREETINGS ABOVE`) — and the model returned
+`UNCLEAR`, said the evidence could not settle the question, and *recommended re-running retrieval*.
+It diagnosed its own inputs. Had it guessed instead, the guards would not have caught it: a
+plausible verdict over thin evidence breaks no rule in `validate.ts`.
+
+That is precisely the hole the header of `validate.ts` admits to: **the guards close fabrication,
+not reasoning.** Human review is what caught the thin evidence — the reviewer saw one junk passage
+sitting next to the claim. Which is the argument for storing the evidence verbatim, now paid off
+once.
+
+⚠️ **The retrieval bug behind it:** post-filtering to INFO/BOOK after fetching 40 hits returns 0 for
+`strength` (all 50 candidates are Fortify Strength records) vs 33 for `security`. Fixed by pushing
+the filter into both candidate CTEs + `hnsw.iterative_scan = relaxed_order` (11 §15).
+
+### ▶ BANK — three more questions from the deploy chain
+
+6. **Silent trigger** — *"You fix a CI failure by editing the lockfile, push, and no run appears.
+   Nothing errored. What is the first thing you check, and why is 'the run failed' the wrong
+   hypothesis?"*
+7. **Filtered ANN** — *"Why does adding `WHERE type = 'INFO'` to an HNSW query return fewer rows
+   than its LIMIT, with no error? What setting fixes it and what does it cost?"*
+8. **Post- vs pre-filter** — *"Retrieval returns 40 hits and you keep the 8 you want. For one query
+   you get zero. Explain why over-fetching more would not reliably fix it."*
+
+The bank now holds **eleven** questions across three sessions. Still unasked.
