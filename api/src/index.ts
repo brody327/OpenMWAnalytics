@@ -7,6 +7,7 @@ import express, {
 import { ingest } from './events/ingest.js';
 import { listEvents, listMods } from './events/list.js';
 import { requireIngestToken } from './events/auth.js';
+import { ingestLimiter, generateLimiter, readLimiter } from './events/rateLimit.js';
 import { confrontations } from './stats/confrontations.js';
 import { friction } from './stats/friction.js';
 import { skills } from './stats/skills.js';
@@ -22,6 +23,19 @@ import {
 } from './insights/routes.js';
 
 const app = express();
+
+// ⚠️⚠️ LOAD-BEARING FOR RATE LIMITING, AND SILENT IF WRONG.
+//
+// In production every request arrives via Traefik, so the TCP peer is the ingress, not the client.
+// Without this, `req.ip` is the proxy's address for EVERY request — all clients share one bucket,
+// and the first flooder locks out the entire internet including the shipper. The limiter would
+// report itself working the whole time; the only symptom is legitimate traffic getting 429s.
+//
+// `1`, not `true`. `true` trusts the whole `X-Forwarded-For` chain, which is client-controlled —
+// anyone could append a fake hop and get a fresh bucket per request, turning the limiter off. One
+// hop is exactly the topology we have (09: Traefik -> Service -> pod).
+app.set('trust proxy', 1);
+
 app.use(express.json());
 
 // Liveness check. Wired to k8s livenessProbe AND readinessProbe, so a non-200 here means
@@ -66,28 +80,44 @@ app.get('/ops/freshness', freshness);
 
 // Shipper liveness ping. Authenticated like the other write path -- it writes to the database,
 // and an open endpoint would let anyone forge "the pipeline is fine".
-app.post('/ops/heartbeat', requireIngestToken, heartbeat);
+app.post('/ops/heartbeat', ingestLimiter, requireIngestToken, heartbeat);
 
 // Ingestion. Authenticated: this is the only WRITE path, and deployment put it on the
 // public internet. The read side below stays deliberately open (see events/auth.ts).
-app.post('/events', requireIngestToken, ingest);
+app.post('/events', ingestLimiter, requireIngestToken, ingest);
 
-// Raw event feed (the explorer). Same path as ingest, different verb: POST writes events,
-// GET reads them back. Read side, so it is open like /stats/*.
-app.get('/events', listEvents);
-app.get('/mods', listMods);
+// ── Read side ────────────────────────────────────────────────────────────────────────────────
+//
+// `readLimiter` is applied per-route rather than as `app.use()`, and the routes it is left OFF
+// are the point:
+//
+//   /health   ⚠️ NEVER. The k8s liveness probe hits it every 15s. A limiter there could fail the
+//             probe, k8s would restart the pod, and the "protection" would be the outage. A
+//             rate-limited health check is a self-inflicted crashloop.
+//   /version  same reason in spirit -- CI polls it during a deploy, and throttling that would
+//             fail deploys rather than attackers.
+//   /ops/freshness  an external uptime monitor polls it on a schedule; 429ing the alarm is worse
+//             than the flood it would be protecting against.
+//
+// Everything below is a database read a scraper could actually make expensive, so it gets the
+// backstop.
+app.get('/events', readLimiter, listEvents);
+app.get('/mods', readLimiter, listMods);
 
 // Query / read side (aggregations for the dashboard).
-app.get('/stats/confrontations', confrontations);
-app.get('/stats/friction', friction);
-app.get('/stats/skills', skills);
-app.get('/stats/ranking', ranking);
+app.get('/stats/confrontations', readLimiter, confrontations);
+app.get('/stats/friction', readLimiter, friction);
+app.get('/stats/skills', readLimiter, skills);
+app.get('/stats/ranking', readLimiter, ranking);
 // 10 Q3.6 -- the only /stats route that joins telemetry to the game CORPUS (11).
-app.get('/stats/sufficiency', sufficiency);
+app.get('/stats/sufficiency', readLimiter, sufficiency);
 
 // Hybrid search over the game corpus (design docs 11). NOT under /stats: /stats reports on
 // TELEMETRY, this queries a second corpus -- the game's own text -- and joins to it.
-app.get('/search', search);
+//
+// ⚠️ This one calls OPENAI on a cache miss, so an unlimited scraper here spends money as well as
+// CPU -- the same denial-of-wallet shape as insight generation, at a smaller unit cost.
+app.get('/search', readLimiter, search);
 
 // Phase 4c -- generated insights (design docs 12). The only route in this API whose output was
 // not computed, so it is the only one with a review gate in front of the public read.
@@ -95,8 +125,8 @@ app.get('/search', search);
 // Generation is authenticated because it SPENDS MONEY (denial-of-wallet, not just abuse), and the
 // review routes because they decide what the public sees. GET /insights is open like every other
 // read -- and serves approved rows only, in SQL, with no query parameter that can widen it.
-app.post('/insights/generate', requireIngestToken, postGenerate);
-app.get('/insights', listInsights);
+app.post('/insights/generate', generateLimiter, requireIngestToken, postGenerate);
+app.get('/insights', readLimiter, listInsights);
 app.get('/insights/review', requireIngestToken, listPending);
 app.post('/insights/:id/review', requireIngestToken, reviewInsight);
 
