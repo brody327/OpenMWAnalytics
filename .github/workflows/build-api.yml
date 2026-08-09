@@ -262,10 +262,18 @@ jobs:
           # Parameters go in a FILE, not inline. These commands contain quotes and shell
           # metacharacters, and threading them through --parameters key=value is the kind of
           # quoting that works until a tag contains something unexpected and then fails obscurely.
+          # ⚠️ `set -eu`, NOT `set -euo pipefail`. AWS-RunShellScript executes these with /bin/sh,
+          # which on Ubuntu is DASH, not bash — and dash has no `pipefail`, so that line aborts the
+          # script at line 1 with "Illegal option -o pipefail" before kubectl is ever reached.
+          # Nothing here pipes, so pipefail was buying nothing anyway.
+          #
+          # `set -e` still earns its place: without it a failed `set image` would fall through to
+          # `rollout status`, which would then report on the DEPLOYMENT THAT DID NOT CHANGE and
+          # exit 0. The job would go green having deployed nothing.
           cat > /tmp/ssm-params.json <<JSON
           {
             "commands": [
-              "set -euo pipefail",
+              "set -eu",
               "kubectl set image deployment/omwa-api api=${IMAGE} migrate=${IMAGE}",
               "kubectl rollout status deployment/omwa-api --timeout=180s"
             ]
