@@ -665,7 +665,7 @@ assumable only by a push to `main` of this repository, and not by any other repo
     "Condition": {
       "StringEquals": {
         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub": "repo:<OWNER>/<REPO>:ref:refs/heads/main"
+        "token.actions.githubusercontent.com:sub": "repo:<OWNER>@<OWNER_ID>/<REPO>@<REPO_ID>:ref:refs/heads/main"
       }
     }
   }]
@@ -712,3 +712,33 @@ than never having had one, because nothing will ever fail to remind you it is th
 
 And it still ends in the check that cannot be faked: `/version` fetched through the public ingress
 must equal the commit that was just built.
+
+#### ⭐⭐ The `sub` claim carries immutable IDs — and every guide documents the old format
+
+The OIDC role refused every attempt with `Not authorized to perform sts:AssumeRoleWithWebIdentity`,
+across two runs, with a trust policy that was **correct**: right provider ARN, right audience, right
+repo, right branch, right casing (verified against the GitHub API).
+
+The claim actually being presented was:
+
+```
+sub: repo:brody327@47648714/OpenMWAnalytics@1303445605:ref:refs/heads/main
+```
+
+GitHub appends **immutable numeric identifiers** — owner id and repo id — rather than the widely
+documented `repo:OWNER/REPO:ref:refs/heads/BRANCH`. Match on the documented form and STS refuses,
+with a message that names neither the claim nor the condition that failed.
+
+⭐ **Do not disable the feature to make the old format work.** The ID form is strictly stronger: it
+pins trust to the repository's *identity*, not its *name*, so a rename — or someone later creating a
+repo at the abandoned name — cannot inherit the role. Name-matching was always the weaker version.
+
+⚠️ **The method here matters more than the fact**, because the fact will drift again. Three
+inspections of the policy found nothing, because inspection compares a policy you can read against a
+token you cannot. The fix was to make the workflow **print the claims it presents** (`sub`, `aud`,
+`iss` — never the token, which is a bearer credential). That step stays in the workflow: it costs one
+second and converts this entire class of failure from archaeology into a diff.
+
+> **The general rule, third instance this session:** when two things are supposed to match and one
+> of them is invisible, the bug is unfindable by staring at the visible one. Print the invisible
+> half. Cf. `/health` vs `/version`, and the deploy step whose stderr went to `/dev/null`.
