@@ -2161,3 +2161,70 @@ serving traffic?"*
 - **#2** why `(source, record_id)` was rejected — the reason is *this is a search index*.
 - **#3** refuse vs. warn on single-plugin ingest — the mechanism (5,681 records silently
   reverted, exit 0), not just the motive.
+
+## 2026-08-09 — build-first session: CI rollout, Phase 4c, rate limiting. NO ASSESSMENT RAN.
+
+**Mode change, at the learner's request:** *"bank these questions and simply finish the project. We
+can still make choices, but we'll quiz on the why/learning after it's done."* The opening recall
+questions were written, then **banked** (see 🏦 QUESTION BANK above) rather than asked. Assessment
+is deferred, not cancelled — the bank is drawn down in one session once the build finishes, and
+everything below should be added to it.
+
+**Finish line chosen by the learner:** résumé-true + the 4c finale. Delivered: CI auto-rollout
+gated by tests and verified by `GET /version`; Phase 4c end to end (`12`); `/gaps` dashboard view;
+rate limiting. Four commits, 97 tests, tsc clean.
+
+**Decisions the learner made:** plain SSH key in Actions secrets (forced-command hardening offered
+and declined for setup cost, risk recorded in `09 §10`) · Anthropic/Claude as the generation
+provider · a real approval workflow rather than transparent-provenance-only.
+
+### ⭐ The session's theme, unchanged and now on the other foot: RUNNING IT FOUND WHAT TESTS DID NOT
+
+Three real defects, none catchable by the suite that was green at the time. All three are the same
+shape as `type='SPEL'` standing in for "a spell a player can cast" — **a query computing what it
+was told, over rows that do not mean what it assumed.**
+
+| # | found by | the defect |
+| --- | --- | --- |
+| 1 | printing the first real evidence payload | the eight "passages" were all Fortify effect **definitions**, including the remedy's own record — the prompt would have asked whether an item's description signposts that item |
+| 2 | fixing #1 | filtering to narrative types returned **zero** — the semantic neighbourhood of an effect *name* is other effects. Retrieval had to become two passes |
+| 3 | rendering the dashboard | **`check_id` is not a gate key.** `ccff_j_mortar:force` is sixteen gates with disagreeing verdicts; three call sites had assumed one |
+
+⭐ #3 is the best of them and belongs in the bank as a question. The wrong answer was *a real gate
+with real numbers* — well-formed, correctly cited, internally consistent, and about a gate the
+caller had not asked about. Every DB-free test stayed green because the fixture had one gate.
+
+### What was applied FROM the existing debt, without being taught again
+
+- **A check is only worth what it can detect** — used unprompted throughout: `GET /version` exists
+  precisely because `/health` emits `{ok:true}` in both worlds; the deploy job asserts the sha
+  through the public ingress; migration success was verified by counting columns rather than
+  trusting `schema up to date`; the rate limiter was verified on **both** columns (429 at the 11th
+  request **and** 25 untouched `/health` calls).
+- **The allow column is load-bearing** (07-29, from the secret hook) — reappeared twice: the
+  validator's mixed-case citation test, and not rate-limiting `/health`.
+- **Conservation checks** — `total_gates` so truncation announces itself; `matchGate` extracted so
+  the grain rule is testable at all.
+- **Mutation checks** — removing the citation `lower()` broke 4 tests; neutering the number
+  whitelist broke 2.
+
+### ▶ ADD TO THE QUESTION BANK (from this session)
+
+1. **`/health` vs `/version`** — a third system for banked #3, and a *cold* one. Ask: "CI says the
+   deploy succeeded and `/health` returns 200. What observation would prove the new code is
+   actually serving, and why can't `/health` be it?"
+2. **The gate grain** — prediction: "`ccff_j_mortar:force` has 974 recorded failures at
+   `security@25`. I ask for an insight about it by `check_id`. What comes back, and what is wrong
+   with it?" (The answer is not "an error".)
+3. **Why a model here and nowhere else** — explain-back on the *(verdict, signposting)* split:
+   which pair of outcomes leads to opposite work, and why no query can separate them.
+4. **The guards' boundary** — judgement: "the validator passed this insight. What class of wrong is
+   it still capable of being, and which step is supposed to catch that?"
+5. **`trust proxy`** — debug: "rate limiting is live behind Traefik and legitimate users are getting
+   429s while an attacker isn't. What is misconfigured, and why did the limiter look healthy?"
+
+### ⚠️ Still owed, unchanged
+
+The three carried items (shrinkage vs `log`, derived-artefact drift on the friction rollup, and a
+cold retest of "a check that cannot pass under the failure") are **still unasked**. They have now
+carried across three sessions.

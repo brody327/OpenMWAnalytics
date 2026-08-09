@@ -526,3 +526,46 @@ assumed: `search.ts` partitions by `text_hash` (`rn_text = 1`) alongside the par
 by the learner in a browser.
 ⚠️ **Prod:** see `09` — the live API pod predates `GET /search` and the deployment carries no
 `OPENAI_API_KEY`.
+
+## 9. Content gaps (`/gaps`, 2026-08-09)
+
+The surface for Q3.6 and for Phase 4c's generated layer (`12`). A pure Server Component — it
+fetches on the server, renders once, and ships no JavaScript.
+
+Both fetches run concurrently, and **a failure of the insights half must not blank the page**: the
+gate numbers are computed and trustworthy on their own, so the generated layer degrades to nothing
+while the measurements still render.
+
+### Rendering rules that are product decisions, not styling
+
+1. **`reachable: UNKNOWN` RENDERS.** Not hidden, not greyed out, not collapsed into "no". Absence of
+   data must never read as absence of placement.
+2. **`NOT_PLACED` is labelled "Not found in the world", never "unreachable".** Merchants are
+   deliberately outside the survey (`11 §13`), so a remedy that appears nowhere may still be
+   purchasable. Collapsing that in the UI would be the exact overclaim `/stats/sufficiency` was
+   built to avoid, arriving through the front end instead.
+3. **Sample size sits next to every rate-like number** (`10 §3.3`) — `Failures` is the first stat on
+   each card because every other number is only as good as it.
+4. **The API's `reachability_note` is rendered verbatim.** A UI that dropped it would be making a
+   claim the API did not.
+5. **Truncation is stated outright** — "the worst 25 of 6,687 gates".
+6. **A generated insight is badged.** It renders in the same font and the same confident register as
+   the computed numbers beside it; the badge is the only thing telling a reader which is which. The
+   cited `record_id`s are shown so the claim can be checked rather than trusted.
+7. **"No reviewed insight for this gate yet"** is written out. A blank space would let a reader
+   choose between "nothing was generated" and "the model found nothing" — different facts.
+
+### ⚠️ No snapshot fallback
+
+Stronger than `/search`'s reasoning. A stale gap analysis is not slightly-old data: it is a claim
+about **what the game contains**, made against a corpus that may since have been re-ingested. "No
+remedy exists for this gate" is exactly what a mod author would act on by writing content. When
+upstream is down the page says so and shows nothing.
+
+### ⭐⭐ The React key is the full gate grain
+
+`key={gateKey(g)}` over `(check_id, stat, stat_kind, threshold)` — **not `check_id`**. One
+`check_id` is up to sixteen gates (`12 §6`), so keying on it duplicated 11 of 25 keys *and* handed
+the `security@25` insight to the `shortblade@25` card: a real-looking, actionable recommendation
+about the wrong gate. Verified by SSR against the live API: **25 cards, 25 distinct grains, 14
+distinct check_ids.**

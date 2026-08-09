@@ -512,3 +512,77 @@ spell-only test now pin it.
 3. placement counted only for remedies that **actually close the gap** (`magnitude_max >= gap_p90`)
    — counting any Fortify placement would report "reachable" on the strength of a +5 potion against
    a 25-point gap: true about the world, useless about the gate.
+
+## `GET /version` — which build is serving (added 2026-08-09)
+
+```
+GET /version  ->  { "sha": "a1b2c3d…", "built_at": "2026-08-09T14:02:11Z" }
+```
+
+The commit is baked into the image at **build** time (`api/Dockerfile`, `ARG GIT_SHA` → `ENV`),
+never injected by the manifest. Anything the cluster supplies at runtime describes the cluster's
+*intent*, so a manifest could confidently stamp a fresh sha on a stale image — the exact failure
+this exists to detect. Baked into the layer, the value cannot lie.
+
+**Why it exists:** twice a merged API change never reached production and `/health` was green
+throughout (`09 §10`). `/health` emits `{ok:true}` for any build whatsoever, so it carries zero
+information about *which code* is running. CI now asserts `/version` equals the commit it just
+built, **through the public ingress**, and fails the deploy otherwise.
+
+⚠️ **Not wired to any k8s probe, and not rate limited.** An unrecognised sha is a failed deploy, not
+an unhealthy process — restarting the pod would not fix it — and CI polls this during a rollout.
+
+## Rate limiting (added 2026-08-09)
+
+Auth answers *who*; this answers *how much*. `requireIngestToken` stops **anonymous** writes and
+does nothing about a client holding a valid token — and the token ships with the mod and is
+extractable, as `events/auth.ts` already says.
+
+| Scope | Limit | Sized against |
+| --- | --- | --- |
+| ingest (`POST /events`, `/ops/heartbeat`) | 120/min | the shipper batches; a **catch-up burst after an outage is real here** (six days dark in July) and must not be throttled exactly as the pipeline heals |
+| `POST /insights/generate` | 10/min | **spend**, not load — each request costs money |
+| reads (`/events`, `/mods`, `/stats/*`, `/search`, `/insights`) | 300/min | a scraper exhausting a `db.t3.micro`; set well above human dashboard use |
+
+⚠️ **`app.set('trust proxy', 1)` is load-bearing and silent if wrong.** Behind Traefik the TCP peer
+is the ingress, so without it every client shares one bucket and the first flooder 429s the entire
+internet including the shipper — while the limiter reports itself working. `1`, not `true`: `true`
+trusts a client-controlled `X-Forwarded-For` chain, so anyone could append a fake hop for a fresh
+bucket and switch the limiter off.
+
+⚠️ **`/health`, `/version` and `/ops/freshness` are deliberately UNLIMITED.** The k8s liveness probe
+hits `/health` every 15s; a limiter there fails the probe, k8s restarts the pod, and the protection
+becomes the outage.
+
+⚠️ **In-memory store.** Counters reset on pod restart and are per-process, so the effective limit
+multiplies by replica count. Fine at one replica on one node; if this ever scales out the fix is a
+shared store, not a bigger number.
+
+## `?limit` on `GET /stats/sufficiency` (behaviour change 2026-08-09)
+
+The endpoint used to return **every** gate — measured **6,687 gates / 1.86 MB** per request, which
+is a download, not a page render. It now defaults to `limit=100` (max 2000) and carries
+`total_gates`.
+
+`total_gates` exists so **truncation announces itself**: `25 of 25` and `25 of 6,687` support
+opposite conclusions about how much of the mod has a content problem. `limit=0` is honoured as
+counts-only, so the obvious `limit || DEFAULT` idiom is a bug (0 is falsy).
+
+## `/insights/*` — Phase 4c (added 2026-08-09)
+
+Four routes; the boundary between them is the product decision. Full rationale in **`12`**.
+
+| Route | Auth | Behaviour |
+| --- | --- | --- |
+| `POST /insights/generate` | ✅ ingest token | costs money; body requires **all four grain fields** (`check_id`, `stat`, `stat_kind`, `threshold`) |
+| `GET /insights` | public | `status = 'approved'` **in SQL** — no parameter can widen it |
+| `GET /insights/review` | ✅ | the pending queue, **plus the stored evidence** |
+| `POST /insights/:id/review` | ✅ | `pending → approved \| rejected`, once |
+
+⚠️ **`check_id` is NOT a gate key** (`12 §6`): `ccff_j_mortar:force` is sixteen gates with
+disagreeing verdicts. Requiring all four fields is why the generate route cannot answer about a
+gate the caller did not name.
+
+Status codes carry the distinction a caller needs: **422** = we declined to publish it, and here
+are the violations; **404** = the gate does not exist; **503** = generation is not configured
+(fails closed — there is no honest half of an insight).

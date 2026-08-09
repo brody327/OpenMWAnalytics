@@ -417,3 +417,24 @@ players actually engage with*, the result **is** an analytics question and **doe
 with a denominator like any other. Searching the corpus is not; ranking it by telemetry is.
 
 Rule 6 for §6: **a surface earns a row here when it measures players.** Reading game data does not.
+
+## 8. Q3.6 read side shipped (2026-08-09)
+
+The mechanical half went live 2026-07-28 (`/stats/sufficiency`) and was **invisible** — no view
+rendered it. `/gaps` (`07 §9`) closes that, and Phase 4c (`12`) adds the generated layer on top.
+
+⭐ **The inventory gained a distinction it did not have.** Q3.6 asked "does the game contain an
+accessible remedy?" and stopped at yes/no. The pair *(verdict, signposting)* splits the yes:
+
+| | Author's next move |
+| --- | --- |
+| `remedy_exists` + `NOT_SIGNPOSTED` | the content already exists — **write one hint line** |
+| `remedy_exists` + `SIGNPOSTED` | players are being told and still failing — look elsewhere |
+
+Those lead to opposite work, and no query can separate them: the difference is whether a passage of
+prose *points at* a remedy, which is a judgement about text. That is the whole justification for
+reaching for a model here, and it is the only place in this inventory where one is justified.
+
+⚠️ **A gate is `(check_id, stat, stat_kind, threshold)`, not `check_id`** (`12 §6`). Any future
+question keyed on a check rather than a gate will silently aggregate sixteen different gates with
+disagreeing verdicts.
