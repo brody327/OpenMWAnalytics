@@ -23,6 +23,21 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+
+# The commit this image was built from, baked in at BUILD time and served by GET /version.
+#
+# WHY it is an ARG and not an env var injected by Kubernetes: the whole point is to identify
+# THE IMAGE. Anything the cluster supplies at runtime describes the cluster's intent, not the
+# artifact -- a manifest could confidently label a stale image with a fresh sha, which is the
+# exact failure this is built to detect. Baked in, the value cannot be wrong: it travels with
+# the layer or it isn't there.
+#
+# Defaults to "unknown" so a local `docker build` with no --build-arg still succeeds; CI always
+# passes the real sha (see .github/workflows/build-api.yml).
+ARG GIT_SHA=unknown
+ARG BUILT_AT=unknown
+ENV OMWA_GIT_SHA=$GIT_SHA
+ENV OMWA_BUILT_AT=$BUILT_AT
 COPY package.json ./
 RUN npm install --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist ./dist

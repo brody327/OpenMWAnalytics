@@ -442,7 +442,89 @@ it was green throughout both failures.
 `CreateContainerConfigError` and take the entire API down for a feature built to degrade. Contrast
 `OMWA_INGEST_TOKEN`, which fails *closed* — the write path returns 503 without it.
 
-▶ **Still open (deliberately, not forgotten):** nothing triggers a rollout on a new image. CI
-publishes `:latest`, and a running pod never re-pulls it. Until that is wired, **every API change
-needs a manual `kubectl rollout restart`**, and the failure mode is exactly this one: green
-health checks in front of stale code.
+▶ ~~**Still open:** nothing triggers a rollout on a new image.~~ **CLOSED 2026-08-09 — see §10.**
+
+---
+
+## 10. Closing the rollout gap (2026-08-09) — and the check that made it verifiable
+
+The gap above bit **twice**, both times with `/health` green: the search pod predated its own code
+by 45 minutes, and `/stats/sufficiency` returned 404 in production while `/stats/ranking` returned
+200. Both were merged, both were built, both were pushed, neither was *running*.
+
+### Why a new image did nothing
+
+CI pushed a new image to the mutable tag `:latest`; the Deployment was pinned to `:latest`.
+
+**Nothing in Kubernetes watches a registry.** The control loop reconciles the cluster against the
+*pod template stored in the Deployment* — and repointing a tag does not change one byte of that
+template. No diff, no reconciliation, no rollout. `imagePullPolicy: Always` does not help either:
+it governs what happens **when a pod starts**, and no pod was starting. The system was working
+exactly as designed; the design was pointed at the wrong thing.
+
+### The fix — pin an immutable tag from CI
+
+CI now tags every build `:sha-<short>` alongside `:latest`, and the deploy job runs
+`kubectl set image` for **both** the app container and the `migrate` initContainer:
+
+```
+sudo kubectl set image deployment/omwa-api api=<img>:sha-abc1234 migrate=<img>:sha-abc1234
+sudo kubectl rollout status deployment/omwa-api --timeout=180s
+```
+
+`set image` mutates the pod template, so the spec genuinely changes and k8s rolls out on its own.
+Both containers move together on purpose: the initContainer applies the schema the app container
+depends on, and letting them differ recreates the 2026-07-22 production 500 from the other side.
+
+⚠️ **`k8s/deployment.yaml` is now intentionally behind the cluster.** It still reads `:latest` as a
+bootstrap value; the live Deployment runs a sha. A bare `kubectl apply -f` will silently roll the
+image *back*. Check `kubectl get deploy omwa-api -o jsonpath='{..image}'` first.
+
+### ⭐ `GET /version` — the check a stale pod cannot pass
+
+Repointing the image is only half of it. The reason both incidents ran for so long is that **every
+check available was one a broken deploy would also pass**: `/health` emits `res.json({ ok: true })`
+for any build whatsoever, and `rollout status` only proves pods reached Ready — which is decided by
+`/health`.
+
+So the deploy now ends in an observation the failure is *structurally incapable* of producing. The
+commit sha is baked into the image at build time (`api/Dockerfile`, `ARG GIT_SHA` → `ENV`), and
+`GET /version` reports it. CI polls the endpoint **through the public ingress** — DNS, Traefik,
+Service, pod, the same path a user takes — and fails the job unless it equals the commit that just
+built. A pod running last week's image cannot return this week's sha.
+
+The `ARG` is deliberately **not** an env var injected by the manifest: anything supplied at runtime
+describes the cluster's *intent*, so a manifest could confidently stamp a fresh sha on a stale
+image — the exact failure being detected. Baked into the layer, the value cannot lie.
+
+`/version` is deliberately **not** wired to any probe. An unrecognised sha is a failed deploy, not
+an unhealthy process, and restarting the pod would not fix it.
+
+### The other half: CI never ran the tests
+
+Worth recording, because automating the rollout *removed a safety gate nobody had designed*. The
+only thing between a broken commit and production was that a human had to SSH in and restart the
+deployment by hand — and would presumably not do that with a red suite. Deleting the human step
+without adding a test step would have made the pipeline strictly more dangerous than the footgun it
+replaced. The workflow now runs `tsc` + all 77 tests (with a `pgvector` service container, since
+`corpus/ingest.test.ts` needs a real database) **before** the image is built.
+
+### ⚠️ Accepted risk, recorded not hidden
+
+`DEPLOY_SSH_KEY` is an **unrestricted** key for `ubuntu@<eip>`, so anyone who can push to `main`
+has a shell on the production host. Accepted for a single-maintainer repo (Actions secrets are not
+exposed to fork PRs). The hardened form was offered and declined for setup cost: a dedicated
+keypair with a forced command in `authorized_keys`
+(`command="/usr/local/bin/omwa-deploy",no-pty,no-port-forwarding`), which reduces a leaked secret
+from *root on the host* to *can deploy an image*. Host-key verification is TOFU per run
+(`ssh-keyscan`); pinning it in a `DEPLOY_KNOWN_HOSTS` secret is the stronger form.
+
+⚠️ **Pushing to `main` is now a production deploy.** That was previously a separate, manual, human
+decision.
+
+### Required secrets (add via the GitHub web UI)
+
+| Secret | Value |
+| --- | --- |
+| `DEPLOY_SSH_KEY` | the full contents of the EC2 private key, `-----BEGIN` line through `-----END` line |
+| `DEPLOY_HOST` | the elastic IP of the k3s node |

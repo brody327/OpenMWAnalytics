@@ -1,9 +1,17 @@
 name: build-api
 
-# CI for the ingest/query API: on every push to main that touches api/, build the
-# Docker image and push it to GHCR (GitHub Container Registry). The k3s cluster later
-# pulls the published image by tag — this is the "build" half of CI/CD; deploying to
-# the cluster is a separate step.
+# CI/CD for the ingest/query API: on every push to main that touches api/, run the test
+# suite, build the Docker image, push it to GHCR, and roll it out to the k3s cluster.
+#
+# ⚠️ THIS PIPELINE USED TO STOP AT "PUSH", AND THAT WAS A SILENT FAILURE (design docs 09).
+# A Deployment pinned to a MUTABLE tag (:latest) does not change when the tag is repointed --
+# nothing in the cluster is watching a registry -- and a running pod never re-pulls. So a green
+# CI run meant "the image exists", not "the image is serving". It bit twice: the search endpoint
+# went live 45 minutes after its pod started, and /stats/sufficiency 404'd in production while
+# /stats/ranking happily returned 200. Both times /health was green.
+#
+# The deploy job below closes that gap, and -- more importantly -- ENDS IN A CHECK A STALE POD
+# CANNOT PASS. See its comments.
 on:
   push:
     branches: [main]
@@ -16,11 +24,77 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/omwanalytics-api
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # 1. TEST -- the gate that used to be a human
+  # ---------------------------------------------------------------------------
+  # Until now the only thing standing between a broken commit and production was that a person
+  # had to SSH in and restart the deployment by hand, and would presumably not do that with a
+  # red suite. Automating the rollout deletes that pause, so the suite has to run here instead.
+  test:
+    runs-on: ubuntu-latest
+    services:
+      # 6 of the 7 test files are pure, but corpus/ingest.test.ts talks to Postgres and needs
+      # the vector extension -- hence pgvector's image rather than stock postgres.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: omwa_test
+        ports:
+          - 5432:5432
+        # Without a health check the job races the database: `npm test` can connect before
+        # Postgres finishes initialising and fail for a reason that has nothing to do with the code.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/omwa_test
+      DATABASE_SSL: 'false'   # local container, unlike RDS which requires TLS
+    defaults:
+      run:
+        working-directory: ./api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `npm install`, not `npm ci`: the lockfile lives at the monorepo root, not in api/.
+      # Same compromise the Dockerfile documents.
+      - name: Install dependencies
+        run: npm install
+
+      # tsc IS the typecheck gate -- there is no separate lint job, and the image build would
+      # fail here anyway. Failing now costs 30s instead of a whole build.
+      - name: Typecheck + compile
+        run: npm run build
+
+      # The same migration entrypoint the deployment's initContainer runs, so CI exercises the
+      # real migration path rather than a drizzle-kit shortcut that production never takes.
+      - name: Apply migrations
+        run: node dist/jobs/migrate.js
+
+      - name: Test
+        run: npm test
+
+  # ---------------------------------------------------------------------------
+  # 2. BUILD + PUSH
+  # ---------------------------------------------------------------------------
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write        # lets the auto GITHUB_TOKEN push to GHCR — no PAT needed
+    outputs:
+      # The immutable tag the deploy job pins the Deployment to. Published as a job output so
+      # the tag that gets BUILT and the tag that gets DEPLOYED are the same string, computed
+      # once. Deriving it twice would let them drift, and a deploy job pinning a tag that was
+      # never pushed fails in a confusing place.
+      image_tag: ${{ steps.sha.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,8 +105,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Derive tags/labels: a stable :latest plus an immutable :<git-sha> so every
-      # deploy is traceable to a commit.
+      - name: Compute short sha tag
+        id: sha
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # Derive tags/labels: a stable :latest plus an immutable :sha-<short> so every
+      # deploy is traceable to a commit. :latest is kept only for convenience/manual pulls —
+      # the Deployment is pinned to the immutable tag by the deploy job below.
       - name: Compute image metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -40,7 +119,11 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest
-            type=sha,format=short
+            type=raw,value=${{ steps.sha.outputs.tag }}
+
+      - name: Build timestamp
+        id: ts
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -49,6 +132,84 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Bake the commit into the image so GET /version can prove WHICH BUILD is serving
+          # traffic. The OCI labels above are metadata ABOUT the image and are invisible to the
+          # running process; these become env vars the code can actually read and report.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILT_AT=${{ steps.ts.outputs.value }}
           # (Layer caching via type=gha was removed: GitHub retired the v1 Actions
           # Cache backend in early 2025 and the exporter failed the job. Saves only
           # ~30-60s for this small image. A registry-based cache is a future option.)
+
+  # ---------------------------------------------------------------------------
+  # 3. DEPLOY -- repoint the Deployment, then PROVE the new code is serving
+  # ---------------------------------------------------------------------------
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # Guard against a manual workflow_dispatch from a feature branch quietly shipping to prod.
+    if: github.ref == 'refs/heads/main'
+    # ⚠️ ACCEPTED RISK, recorded deliberately (design docs 09): DEPLOY_SSH_KEY is an
+    # unrestricted key for ubuntu@<host>, so anyone who can push to main has a shell on the
+    # production box. Single-maintainer repo, and secrets are not exposed to fork PRs. The
+    # hardened form is a dedicated keypair with a forced command in authorized_keys
+    # (command="/usr/local/bin/omwa-deploy",no-pty,...), which reduces a leaked secret from
+    # "root on the host" to "can deploy an image". Considered and declined for setup cost.
+    steps:
+      - name: Roll out ${{ needs.build-and-push.outputs.image_tag }}
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # TOFU: we trust whatever host key answers right now. This protects the transport but
+          # not against a MITM on the runner's egress. The stronger form pins the host key in a
+          # DEPLOY_KNOWN_HOSTS secret; not done, and called out rather than left to look solid.
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Pin BOTH containers to the same immutable tag. The initContainer runs the schema
+          # migrations and the app container runs the code that depends on them; if they could
+          # differ, a rollout could migrate to one commit's schema and serve another's code --
+          # which is the 2026-07-22 production 500 all over again, from the other direction.
+          #
+          # `kubectl set image` mutates the pod TEMPLATE, so k8s sees a genuinely changed spec
+          # and rolls out on its own. That is the actual fix: repointing a mutable :latest never
+          # changed the spec, so the control loop had nothing to reconcile and did nothing.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ubuntu@$DEPLOY_HOST" \
+            "set -euo pipefail
+             sudo kubectl set image deployment/omwa-api \
+               api=${{ env.IMAGE }}:$IMAGE_TAG \
+               migrate=${{ env.IMAGE }}:$IMAGE_TAG
+             sudo kubectl rollout status deployment/omwa-api --timeout=180s"
+
+      # ⭐ THE CHECK THAT A STALE POD CANNOT PASS.
+      #
+      # Everything above can succeed while production still serves old code -- that is exactly
+      # what happened twice. `rollout status` proves pods reached Ready, and Ready is decided by
+      # /health, which returns {ok:true} for ANY build. So the deploy is not verified until we
+      # observe something only the NEW image can emit: its own commit sha, baked in at docker
+      # build time (api/Dockerfile ARG GIT_SHA), fetched through the PUBLIC ingress so the path
+      # under test is the one users take -- DNS, Traefik, Service, pod.
+      #
+      # A pod running last week's image cannot return this week's sha. There is no way to pass
+      # this check while broken, which is the property /health lacks.
+      - name: Verify the ingress is serving this commit
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 24); do
+            got=$(curl -fsS --max-time 10 https://api.omwanalytics.com/version \
+                    | jq -r '.sha // empty' || true)
+            if [ "$got" = "$GITHUB_SHA" ]; then
+              echo "✅ ingress is serving $got"
+              exit 0
+            fi
+            echo "attempt $i/24: serving '${got:-<no response>}', want '$GITHUB_SHA'"
+            sleep 5
+          done
+          echo "::error::Deploy reported success but the ingress never served $GITHUB_SHA."
+          exit 1

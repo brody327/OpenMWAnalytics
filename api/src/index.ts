@@ -29,6 +29,31 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// WHICH BUILD IS SERVING THIS REQUEST (design docs 09).
+//
+// This exists because /health could not answer it. Twice, a merged API change never reached
+// production -- CI pushed a new :latest, but nothing restarted the pod and a running pod never
+// re-pulls a mutable tag -- and /health returned 200 the whole time. Once the pod predated the
+// code by 45 minutes; once /stats/sufficiency 404'd while /stats/ranking returned 200.
+//
+// The rule that makes this endpoint worth having: don't ask "does the check pass?", ask "would
+// this check ALSO pass if the thing were broken?" /health emits res.json({ ok: true }) in both
+// worlds, so it carries zero information about which code is running. A sha baked into the image
+// at build time is an observation a STALE POD IS STRUCTURALLY INCAPABLE OF PRODUCING: to report
+// the new sha it would have to BE the new image.
+//
+// CI asserts this equals the commit it just built, through the public ingress, and fails the
+// deploy otherwise -- so "deployed" stops meaning "the push succeeded".
+//
+// Deliberately NOT wired to any k8s probe: an unrecognised sha is a deploy failure, not an
+// unhealthy process, and restarting the pod would not fix it.
+app.get('/version', (_req: Request, res: Response) => {
+  res.json({
+    sha: process.env.OMWA_GIT_SHA ?? 'unknown',
+    built_at: process.env.OMWA_BUILT_AT ?? 'unknown',
+  });
+});
+
 // Pipeline freshness (design docs 04). 503 when a shipper has gone silent, so a dumb external
 // uptime monitor can page a human. NO KUBERNETES PROBE MAY POINT AT THIS.
 app.get('/ops/freshness', freshness);

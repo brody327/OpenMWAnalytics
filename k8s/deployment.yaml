@@ -56,9 +56,16 @@ spec:
               memory: 256Mi
       containers:
         - name: api
-          # :latest is convenient but NOT reproducible — you can't tell which commit is
-          # running, and rollbacks are impossible. The production-correct form pins the
-          # image digest/sha (the CI also pushes :<sha> tags). Acceptable here; noted.
+          # ⚠️ THIS TAG IS THE BOOTSTRAP VALUE ONLY -- the live Deployment does NOT run :latest.
+          # The CI deploy job pins both containers to an immutable :sha-<short> tag via
+          # `kubectl set image`, which is what makes a rollout happen at all: repointing a
+          # mutable tag never changes the pod template, so the control loop sees no diff and
+          # does nothing. That is why two merged changes never reached production.
+          #
+          # CONSEQUENCE: this file is now intentionally BEHIND the cluster. A bare
+          # `kubectl apply -f k8s/deployment.yaml` will revert the running image to whatever
+          # :latest currently points at -- usually harmless, occasionally a surprise rollback.
+          # Check `kubectl get deploy omwa-api -o jsonpath='{..image}'` before applying.
           image: ghcr.io/brody327/omwanalytics-api:latest
           imagePullPolicy: Always # re-pull on every pod start since the tag is mutable
           ports:
