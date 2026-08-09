@@ -14,6 +14,12 @@ import { ranking } from './stats/ranking.js';
 import { sufficiency } from './stats/sufficiency.js';
 import { search } from './search/search.js';
 import { freshness, heartbeat } from './ops/freshness.js';
+import {
+  postGenerate,
+  listInsights,
+  listPending,
+  reviewInsight,
+} from './insights/routes.js';
 
 const app = express();
 app.use(express.json());
@@ -82,6 +88,17 @@ app.get('/stats/sufficiency', sufficiency);
 // Hybrid search over the game corpus (design docs 11). NOT under /stats: /stats reports on
 // TELEMETRY, this queries a second corpus -- the game's own text -- and joins to it.
 app.get('/search', search);
+
+// Phase 4c -- generated insights (design docs 12). The only route in this API whose output was
+// not computed, so it is the only one with a review gate in front of the public read.
+//
+// Generation is authenticated because it SPENDS MONEY (denial-of-wallet, not just abuse), and the
+// review routes because they decide what the public sees. GET /insights is open like every other
+// read -- and serves approved rows only, in SQL, with no query parameter that can widen it.
+app.post('/insights/generate', requireIngestToken, postGenerate);
+app.get('/insights', listInsights);
+app.get('/insights/review', requireIngestToken, listPending);
+app.post('/insights/:id/review', requireIngestToken, reviewInsight);
 
 // Central error handler (Express 5 forwards async rejections here).
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

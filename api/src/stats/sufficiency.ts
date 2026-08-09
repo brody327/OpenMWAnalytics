@@ -205,7 +205,16 @@ export function classifyGates(rows: GateGap[], surveyed = false): SufficiencyRes
   };
 }
 
-export async function sufficiency(_req: Request, res: Response): Promise<void> {
+/**
+ * The gate query, extracted so it has exactly ONE definition.
+ *
+ * Phase 4c's insight generator needs the same numbers this endpoint reports. Writing a second
+ * query for "the same" gate would create two definitions of `gap_p90`, and the moment one is
+ * tuned (a different percentile, a changed `trigger` filter) the insight would describe a gate the
+ * dashboard does not show -- with both halves internally consistent and no error anywhere. That is
+ * the derived-artefact drift of 11 §14 in miniature, and the cheap fix is to not have two.
+ */
+export async function queryGates(): Promise<GateGap[]> {
   const rows = await db.execute(sql`
     with failed as (
       select
@@ -294,15 +303,22 @@ export async function sufficiency(_req: Request, res: Response): Promise<void> {
     group by 1, 2, 3, 4, 5, 6, 7
     order by g.fails desc
   `);
+  return rows.rows as unknown as GateGap[];
+}
 
-  // Has a survey ever been ingested? Decides UNKNOWN vs a real reachability answer, and is asked
-  // separately on purpose: inferring it from "did any gate report a placement" would report
-  // NOT_PLACED for every gate on an empty database, which is a finding rather than an absence.
-  const surveyed = (
-    (await db.execute(sql`select count(*)::int as n from world_surveys`)).rows as unknown as [
-      { n: number },
-    ]
-  )[0].n > 0;
+/**
+ * Has a world survey ever been ingested?
+ *
+ * Asked separately on purpose: inferring it from "did any gate report a placement" would report
+ * NOT_PLACED for every gate on an empty database, which is a finding rather than an absence.
+ */
+export async function isSurveyed(): Promise<boolean> {
+  const r = (await db.execute(sql`select count(*)::int as n from world_surveys`))
+    .rows as unknown as [{ n: number }];
+  return r[0].n > 0;
+}
 
-  res.json(classifyGates(rows.rows as unknown as GateGap[], surveyed));
+export async function sufficiency(_req: Request, res: Response): Promise<void> {
+  const [rows, surveyed] = await Promise.all([queryGates(), isSurveyed()]);
+  res.json(classifyGates(rows, surveyed));
 }

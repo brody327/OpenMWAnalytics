@@ -57,6 +57,13 @@
       "when": 1785265303265,
       "tag": "0007_world_survey",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786295457935,
+      "tag": "0008_insights",
+      "breakpoints": true
     }
   ]
 }

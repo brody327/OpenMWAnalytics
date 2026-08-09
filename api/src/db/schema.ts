@@ -594,3 +594,73 @@ export const itemPlacements = pgTable(
     index('item_placements_item_idx').on(t.itemRecordId),
   ],
 );
+
+// ---------------------------------------------------------------------------------------------
+// Phase 4c: generated insights and their review state (design docs 12).
+//
+// WHY THIS IS A TABLE AND NOT A LIVE CALL.
+//
+// A generated insight is not a query result. Two things make it a stored artefact:
+//
+//  1. **Review is a state transition.** Résumé bullet 5's "human review" means an insight is
+//     `pending` until a person approves it, and only approved insights render publicly. That is a
+//     status column by definition -- generating on read would mean serving unreviewed model output
+//     as though it were reviewed, which is the whole thing the review step exists to prevent.
+//  2. **The evidence has to be kept.** A reviewer judging "is this a correct inference?" needs the
+//     exact payload the model saw, not today's re-run of the query. Telemetry accumulates and the
+//     corpus gets re-ingested, so a later re-derivation would show a reviewer different evidence
+//     from the one the claim was made against -- and they would be reviewing a different claim.
+//
+// ⚠️ This makes the row a DERIVED ARTEFACT with all that implies: change the prompt, the schema or
+// the evidence query and every stored insight was produced by code that no longer exists. That is
+// the same class as prod's stale `game_chunks` (11 §14) -- hence `prompt_version` below, which
+// exists so the drift is queryable instead of invisible.
+export const insights = pgTable(
+  'insights',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // The gate this is about. Not a foreign key: gates are a GROUP BY over the event log, not a
+    // table, so there is nothing to reference. An insight can outlive the failures that produced
+    // it, which is correct -- the finding was true when it was made.
+    checkId: text('check_id').notNull(),
+    stat: text('stat').notNull(),
+    threshold: integer('threshold').notNull(),
+
+    // ── the generated content ──
+    headline: text('headline').notNull(),
+    signposting: text('signposting').notNull(),
+    rationale: text('rationale').notNull(),
+    recommendation: text('recommendation').notNull(),
+    /** record_ids the rationale rests on -- all validated as present in `evidence` before insert. */
+    citations: jsonb('citations').notNull(),
+
+    // ── provenance: what produced it ──
+    /** Resolved from the response, so a server-side fallback records the model that ACTUALLY ran. */
+    model: text('model').notNull(),
+    /** Bumped whenever the prompt or evidence shape changes. Makes derived-artefact drift a query. */
+    promptVersion: integer('prompt_version').notNull(),
+    /** The exact payload the model saw. The reviewer's oracle; see the header. */
+    evidence: jsonb('evidence').notNull(),
+
+    // ── review state ──
+    /** pending | approved | rejected. Only `approved` is ever rendered to a non-reviewer. */
+    status: text('status').notNull().default('pending'),
+    reviewNote: text('review_note'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Enforced in the database, not just in the handler. `status` drives what the public dashboard
+    // renders, so a typo'd value must not be storable -- a row reading 'aproved' would silently
+    // fail the `= 'approved'` filter and vanish, which looks like the insight was never generated.
+    check('insights_status_ck', sql`${t.status} in ('pending', 'approved', 'rejected')`),
+    check(
+      'insights_signposting_ck',
+      sql`${t.signposting} in ('SIGNPOSTED', 'NOT_SIGNPOSTED', 'UNCLEAR')`,
+    ),
+    // The dashboard's read: approved insights for a gate, newest first.
+    index('insights_check_status_idx').on(t.checkId, t.status, t.createdAt),
+    // The review queue's read: everything still pending, oldest first.
+    index('insights_status_created_idx').on(t.status, t.createdAt),
+  ],
+);
