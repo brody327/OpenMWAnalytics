@@ -193,6 +193,38 @@ jobs:
       # What replaced it: a role AWS issues credentials to only when the caller proves it is a
       # push to main of this repository, scoped to ssm:SendCommand on ONE instance and ONE
       # document. A leaked GitHub token cannot open a shell; it can deploy an image.
+      # ── DIAGNOSTIC: what claims are we actually presenting? ───────────────────────────────────
+      #
+      # `Not authorized to perform sts:AssumeRoleWithWebIdentity` means STS validated the token and
+      # the ROLE'S TRUST POLICY refused it — but it will not say which condition failed. Without
+      # this you are comparing a policy you can read against a token you cannot, which is guesswork.
+      #
+      # ⚠️ Prints the CLAIMS ONLY, never the token. `sub`, `aud` and `repository` are public facts
+      # about the run; the JWT is a bearer credential and is piped, never echoed and never passed
+      # as an argv (which would expose it in the runner's process list).
+      - name: Show the OIDC claims being presented
+        run: |
+          set -euo pipefail
+          curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
+          | node -e '
+              let s="";
+              process.stdin.on("data", d => s += d).on("end", () => {
+                const jwt = JSON.parse(s).value;
+                const p = JSON.parse(
+                  Buffer.from(jwt.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"), "base64").toString()
+                );
+                console.log("sub:        " + p.sub);
+                console.log("aud:        " + p.aud);
+                console.log("repository: " + p.repository);
+                console.log("ref:        " + p.ref);
+                console.log("issuer:     " + p.iss);
+                console.log("");
+                console.log("The trust policy must match sub and aud EXACTLY (both case-sensitive),");
+                console.log("and Principal.Federated must be the provider ARN for that issuer.");
+              });
+            '
+
       - name: Assume the deploy role (OIDC — nothing stored in this repo)
         uses: aws-actions/configure-aws-credentials@v4
         with:
