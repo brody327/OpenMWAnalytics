@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
+import { envNote, envPredicate, parseEnvScope, type EnvScope } from './envScope.js';
 
 // GET /stats/sufficiency
 //
@@ -153,6 +154,9 @@ export interface SufficiencyResult {
    * about how much of the mod has a content problem.
    */
   total_gates: number;
+  /** Which events the gates were computed from. Provenance rides ON the payload. */
+  env_scope: EnvScope;
+  env_note: string;
   gates: GateSufficiency[];
 }
 
@@ -210,6 +214,7 @@ export function classifyGates(
   rows: GateGap[],
   surveyed = false,
   limit?: number,
+  scope: EnvScope = 'real',
 ): SufficiencyResult {
   // Rows arrive ordered by `fails` desc, so a truncated page is "the gates hurting the most
   // players" rather than an arbitrary slice -- which is the only ordering that makes a limit
@@ -221,6 +226,10 @@ export function classifyGates(
     reachability_note: surveyed ? PLACEMENT_NOTE : REACHABILITY_NOTE,
     surveyed,
     total_gates: rows.length,
+    // Provenance rides ON the payload, same rule as `reachable: UNKNOWN` and `total_gates`: a
+    // consumer must never have to guess whether a number came from real play or from the seeder.
+    env_scope: scope,
+    env_note: envNote(scope),
     gates,
   };
 }
@@ -234,7 +243,7 @@ export function classifyGates(
  * dashboard does not show -- with both halves internally consistent and no error anywhere. That is
  * the derived-artefact drift of 11 §14 in miniature, and the cheap fix is to not have two.
  */
-export async function queryGates(): Promise<GateGap[]> {
+export async function queryGates(scope: EnvScope = 'real'): Promise<GateGap[]> {
   const rows = await db.execute(sql`
     with failed as (
       select
@@ -249,6 +258,16 @@ export async function queryGates(): Promise<GateGap[]> {
         -- carries no frustration signal and must not enter a difficulty metric.
         and data->>'trigger' = 'inspect'
         and not (data->>'passed')::bool
+        -- ⭐ DEFAULTS TO REAL PLAY ONLY, and this is the load-bearing line of the whole seeding
+        -- plan. A gate is a FINDING: "the content has no remedy for this" is something a mod
+        -- author acts on by writing content. Computed over seeded rows it is fiction wearing the
+        -- same font, and -- because generateInsight() resolves its gate through this very query --
+        -- a fabricated gate could otherwise reach a paid model call and be published as a
+        -- human-reviewed insight about a problem that does not exist.
+        --
+        -- Structural, not a separate guard: a synthetic gate is simply not FOUND here, so
+        -- generation returns no_gate without anyone having to remember to check.
+        and ${envPredicate(scope)}
     ),
     gates as (
       select check_id, stat, stat_kind, threshold,
@@ -358,6 +377,10 @@ export async function sufficiency(req: Request, res: Response): Promise<void> {
     ? Math.min(Math.max(Math.trunc(raw), 0), MAX_LIMIT)
     : DEFAULT_LIMIT;
 
-  const [rows, surveyed] = await Promise.all([queryGates(), isSurveyed()]);
-  res.json(classifyGates(rows, surveyed, limit));
+  // Defaults to `real` (envScope.ts). Seeded rows have to be asked for by name -- so no amount of
+  // running the seeder can quietly turn this findings endpoint into fiction.
+  const scope = parseEnvScope(req.query.env);
+
+  const [rows, surveyed] = await Promise.all([queryGates(scope), isSurveyed()]);
+  res.json(classifyGates(rows, surveyed, limit, scope));
 }

@@ -96,8 +96,11 @@ ingest authenticated. Remaining threads:
   what exists.
 - ▶ **Rate limiting** (`05`) — auth stops anonymous writes, not a valid-token client
   flooding the endpoint. The honest next security gap.
-- **Filter `/stats/*` to `env = 'prod'`** (`06`) — deliberately *not* done: every row today
-  is the author's, so filtering would blank the dashboard. Do it when player data exists.
+- ✅ ~~**Filter `/stats/*` to `env = 'prod'`**~~ **RESOLVED 2026-08-09 — but not as written**
+  (`06 §env scope`). ⚠️ `env = 'prod'` would have **blanked the public dashboard**: all 145 real
+  prod events carry `env = 'dev'` (real play from the author's machine). The distinction that
+  matters is **real vs fabricated**, so the predicate is `env <> 'synthetic'`, and it is applied to
+  the **findings** endpoint only — demo views keep their volume behind a banner.
 - **Milestone / progression events** (`10` Module 4) — completion funnel (4.2), pacing (4.3).
 - **`SkillProgression` engine event** (`03` + `08`) — proves the **passive/auto**
   instrumentation path (engine hook, no mod cooperation); all current work is manual.

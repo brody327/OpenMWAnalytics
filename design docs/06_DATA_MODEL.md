@@ -829,3 +829,63 @@ indistinguishable from an outage. The fix, twice now, is a dedicated liveness ro
 **`last_shipped_seq`** lets *alive but stuck* be separated from *alive and idle* — a shipper that
 keeps checking in while its offset never advances is a different failure from one with nothing to
 send. Nullable, and `COALESCE`d on update so a heartbeat that omits it cannot erase a known value.
+
+## §env scope — which events a read may see (2026-08-09)
+
+Prerequisite for seeding the public database with demo volume. Written before any seeding, because
+the ordering is the safety property: once fabricated rows exist, every unfiltered read is wrong and
+nothing says so.
+
+### ⚠️ The open item was wrong, and measuring first is what caught it
+
+Doc 00 carried *"filter `/stats/*` to `env = 'prod'`"* for weeks. Measured before implementing:
+
+```
+PROD:   dev 145                                    <- every real event; NONE are 'prod'
+LOCAL:  synthetic 1,000,000 | dev 1,146 | prod 12
+```
+
+**`env = 'prod'` would have blanked the entire public dashboard.** Real gameplay from the author's
+own machine ships as `dev`, and that is still real data.
+
+⭐ The distinction that matters is **REAL vs FABRICATED**, not prod vs dev. So the predicate is a
+single exclusion — `env <> 'synthetic'` — which also means every *future* env value is
+real-by-default. That is the safe direction: adding `staging` later must not silently vanish from
+the dashboard. An inclusion list (`env IN ('prod','dev')`) fails invisibly; an exclusion fails
+loudly.
+
+### The split: findings vs demo
+
+Not every view wants the same answer, and forcing one policy on both would be wrong in one of them.
+
+| | Scope | Because it demonstrates |
+| --- | --- | --- |
+| `/stats/sufficiency`, `/gaps`, `/insights` | **real only** (default, `?env=` to override) | *what is true.* A gate is a FINDING an author acts on by writing content |
+| `/stats/confrontations`, `/ranking`, `/skills`, `/friction`, `/events` | **everything**, banner in the UI | *handling* data — keyset pagination, rollups, index-only scans, shrinkage at volume |
+
+Seeded volume is the *point* of the second group. Padding the first group makes it worthless.
+
+⭐ **The safety property is structural, not a guard.** `generateInsight()` resolves its gate through
+`queryGates()`, which defaults to real — so a synthetic gate is not *rejected*, it is **not found**.
+Verified: a seeded gate with 974 fabricated failures returns `no_gate`. Nobody has to remember to
+check, which is the only kind of check that survives.
+
+`parseEnvScope` defaults to `real` and falls back to `real` on anything unrecognised — a typo'd
+`?env=prodd` must show *fewer* things, never more. Every response carries `env_scope` + `env_note`,
+the same rule as `total_gates` and `reachable: UNKNOWN`: provenance rides on the payload.
+
+### ⚠️ Two hazards this deliberately does NOT touch
+
+1. **The tuned indexes.** `events_confrontation_cols_idx` is partial on `(suspect, topic, passed)`
+   and does not contain `env`. Adding an env predicate to `/stats/confrontations` or `/stats/ranking`
+   would force a heap visit and **silently undo the index-only scans** (~7×, rounds 1–5 above). That
+   is a second reason those endpoints stay unfiltered — the filter there would cost real performance
+   to remove data the view actively wants.
+
+2. ⚠️⚠️ **The friction rollup has no `env` column and the fold job does not filter it.** It is
+   incremental and fold-once (`friction_fold_state`, `friction_sessions_done`), so **seeded events
+   reaching prod would be permanently baked into the precomputed aggregates** — unrecoverable
+   without a full rebuild. This is the project's own GRAIN rule in reverse: *you can never filter at
+   a finer grain than the one you recorded the discriminator at*, and the rollup collapsed past env.
+   Acceptable **only** because the friction view is a demo view where mixed data is the intent. If
+   friction ever needs to report a finding, `env` must join the rollup's grain first.
