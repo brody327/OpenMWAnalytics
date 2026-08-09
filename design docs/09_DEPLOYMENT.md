@@ -528,3 +528,50 @@ decision.
 | --- | --- |
 | `DEPLOY_SSH_KEY` | the full contents of the EC2 private key, `-----BEGIN` line through `-----END` line |
 | `DEPLOY_HOST` | the elastic IP of the k3s node |
+
+### ⚠️ The first CI run failed: a Windows-only lockfile met a Linux runner
+
+Worth recording because it will recur with the next native dependency, and because it is a
+different failure class from anything else in this doc.
+
+`tsc` died on the runner with `Unable to resolve @typescript/typescript-linux-x64`. **TypeScript 7
+is the Go port**, so `tsc` is a native binary shipped as one `optionalDependency` per platform
+(`@typescript/typescript-{linux-x64,win32-x64,darwin-arm64,…}`). npm writes a lockfile entry only
+for the platform variant it **actually installed** — and this lockfile has only ever been generated
+on Windows. The entry for linux-x64 did not exist, so the runner installed a `typescript` package
+with no executable inside it.
+
+⭐ **Why this had never happened before:** the Dockerfile copies **only `api/package.json`**, never
+the lockfile, so the image build resolves fresh and gets the correct linux binary. The bug needed a
+job that checks out the whole repo *and* installs from the root lockfile — which is exactly what the
+new `test` job is. **The very first run of CI found it, which is the job working.**
+
+**Fixed** by adding the missing linux-x64 entries to the committed lockfile, in the same minimal
+shape npm writes for the win32 siblings (`version`/`os`/`cpu`/`optional`, no `resolved`/`integrity`
+— npm fetches these by version).
+
+⚠️ **`tsc` was not the only one.** Auditing every platform-gated optional package in the lockfile
+found **`@esbuild/win32-x64` at three different versions with no linux sibling** — and `tsx`, which
+`npm test` runs on, is built on esbuild. The test job would have failed the same way immediately
+after the build started passing. Both were fixed together.
+
+**Verified in both directions**, in a `node:22` container against a `git archive` of the tree:
+with the original lockfile, the *exact* CI error reproduces; with the patched one, `npm install`
+resolves `typescript-linux-x64` + `esbuild/linux-x64` (×2), `tsc` exits 0, and `tsx` executes
+TypeScript. Windows entries are untouched and the local suite still passes 97/97.
+
+▶ **When adding a dependency with native binaries**, audit the lockfile for platform-gated optional
+packages that lack a linux entry:
+
+```js
+// node -e '…' from the repo root
+const lock = require('./package-lock.json');
+for (const [k, v] of Object.entries(lock.packages))
+  if (v?.optional && v.os && !v.os.includes('linux')) console.log(k, v.os);
+```
+
+▶ **Open, and the deeper version of this:** the image is built from an *unlocked* `npm install`
+(`api/Dockerfile`), so CI's locked tree and production's resolved tree are not guaranteed to be the
+same dependency set. Patching the lockfile makes CI pass; it does not make the two agree. The real
+fix is to build the image from the repo root against the workspace lockfile — deliberately not done
+here, because it is a bigger change than unblocking a deploy warranted.
