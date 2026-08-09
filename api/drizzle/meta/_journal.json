@@ -64,6 +64,13 @@
       "when": 1786295457935,
       "tag": "0008_insights",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786296340104,
+      "tag": "0009_insights_gate_grain",
+      "breakpoints": true
     }
   ]
 }

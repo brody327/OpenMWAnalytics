@@ -23,8 +23,11 @@ import { providerFromEnv } from './provider.js';
 /** Columns the public may see. `evidence` is deliberately absent -- see below. */
 const publicColumns = {
   id: insights.id,
+  // All four grain fields are public, because a consumer needs them to attach an insight to the
+  // right row. Serving `check_id` alone would push the sixteen-gates bug into every client.
   check_id: insights.checkId,
   stat: insights.stat,
+  stat_kind: insights.statKind,
   threshold: insights.threshold,
   headline: insights.headline,
   signposting: insights.signposting,
@@ -48,8 +51,23 @@ const GENERATED_NOTE =
   'Every number and cited record was checked against that evidence. Whether a player can OBTAIN ' +
   'any remedy is NOT addressed here -- see /stats/sufficiency `reachable`.';
 
+/**
+ * ⚠️ ALL FOUR FIELDS REQUIRED, and none of them may be optional-with-a-default.
+ *
+ * `check_id` alone does not name a gate: `ccff_j_mortar:force` is sixteen of them, spanning
+ * security@25 to security@100 plus alchemy, shortblade, luck and personality, with verdicts from
+ * `no_remedy` to `remedy_exists`. An earlier version took a bare `check_id` and answered about
+ * whichever gate had the most failures -- a correct, well-cited insight about a gate the caller
+ * had not asked about.
+ *
+ * Making the caller name the gate exactly is the fix. Defaulting the missing fields would have
+ * hidden the same bug behind a friendlier API.
+ */
 const generateBody = z.object({
   check_id: z.string().min(1),
+  stat: z.string().min(1),
+  stat_kind: z.string().min(1),
+  threshold: z.number().int(),
 });
 
 const reviewBody = z.object({
@@ -68,7 +86,9 @@ const reviewBody = z.object({
 export async function postGenerate(req: Request, res: Response): Promise<void> {
   const parsed = generateBody.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'check_id is required' });
+    res.status(400).json({
+      error: 'check_id, stat, stat_kind and threshold are all required — check_id alone does not identify a gate',
+    });
     return;
   }
 
@@ -82,7 +102,7 @@ export async function postGenerate(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const result = await generateInsight(parsed.data.check_id, provider);
+  const result = await generateInsight(parsed.data, provider);
 
   // Status codes carry the distinction the caller actually needs: did WE decline to publish this
   // (422, and here are the violations), or did the request never make sense (404)?

@@ -14,6 +14,7 @@ import {
 const evidence: InsightEvidence = {
   check_id: 'ccff_lelene_confrontation:persuade',
   stat: 'personality',
+  stat_kind: 'attribute',
   threshold: 40,
   gap_p90: 20,
   fails: 60,

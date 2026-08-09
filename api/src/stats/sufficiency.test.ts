@@ -130,3 +130,32 @@ test('possible is treated as a superset of reliable', () => {
   const g = classifyGate(gate({ reliable: 2, possible: 0 }));
   assert.equal(g.verdict, 'no_remedy');
 });
+
+test('⭐ a truncated page ANNOUNCES itself — total_gates reports the full count', () => {
+  // The discriminating assertion. If `total_gates` ever reported the PAGE size instead of the
+  // corpus size, a reader of 1 row could not tell "this mod has one problem gate" from "these are
+  // the worst 1 of 3" — opposite conclusions, identical payload shape, no error anywhere.
+  const rows = [gate({ check_id: 'a', fails: 300 }), gate({ check_id: 'b', fails: 200 }),
+                gate({ check_id: 'c', fails: 100 })];
+
+  const page = classifyGates(rows, false, 1);
+  assert.equal(page.gates.length, 1);
+  assert.equal(page.total_gates, 3, 'total_gates must count every gate, not the page');
+  assert.equal(page.gates[0].check_id, 'a', 'a truncated page keeps the WORST gates, not any 1');
+});
+
+test('limit 0 is honoured as counts-only, and is not confused with "no limit"', () => {
+  // 0 is falsy, so the obvious `limit || DEFAULT` idiom would silently turn "count them for me"
+  // into a full page. Asking how many gates exist without transferring them is legitimate.
+  const rows = [gate({ check_id: 'a' }), gate({ check_id: 'b' })];
+  const r = classifyGates(rows, false, 0);
+  assert.equal(r.gates.length, 0);
+  assert.equal(r.total_gates, 2);
+});
+
+test('an omitted limit still returns every gate (the pre-2026-08-09 behaviour)', () => {
+  const rows = [gate({ check_id: 'a' }), gate({ check_id: 'b' })];
+  const r = classifyGates(rows, false);
+  assert.equal(r.gates.length, 2);
+  assert.equal(r.total_gates, 2);
+});

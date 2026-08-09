@@ -18,6 +18,7 @@ import { usePathname } from 'next/navigation';
 const LINKS = [
   { href: '/', label: 'Mods' },
   { href: '/events', label: 'Events' },
+  { href: '/gaps', label: 'Content gaps' },
   { href: '/search', label: 'Search' },
 ];
 

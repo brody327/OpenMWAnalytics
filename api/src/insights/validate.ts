@@ -52,6 +52,8 @@ export interface EvidencePassage {
 export interface InsightEvidence {
   check_id: string;
   stat: string;
+  /** 'skill' or 'attribute'. Part of the gate's identity, not decoration -- see generate.ts. */
+  stat_kind: string;
   threshold: number;
   gap_p90: number;
   fails: number;

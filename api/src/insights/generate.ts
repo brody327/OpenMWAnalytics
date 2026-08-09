@@ -17,7 +17,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { insights } from '../db/schema.js';
-import { queryGates } from '../stats/sufficiency.js';
+import { queryGates, type GateGap } from '../stats/sufficiency.js';
 import { searchCorpus } from '../search/search.js';
 import type { InsightProvider } from './provider.js';
 import {
@@ -72,12 +72,48 @@ const CANDIDATE_PASSAGES = 40;
  */
 const NARRATIVE_TYPES = new Set(['INFO', 'BOOK']);
 
+/**
+ * What identifies ONE gate.
+ *
+ * ⭐ All four fields, because `check_id` is not a key. Measured 2026-08-09: `ccff_j_mortar:force`
+ * resolves to sixteen gates spanning security@25 through security@100, alchemy, shortblade, luck
+ * and personality -- with verdicts ranging from `no_remedy` to `remedy_exists`. A caller that
+ * names only the check has not named a gate, and the honest response is to require the rest
+ * rather than to pick one.
+ *
+ * `stat_kind` earns its place because skill and attribute names collide across the two enums, the
+ * same reason `/stats/sufficiency` joins on it.
+ */
+export interface GateKey {
+  check_id: string;
+  stat: string;
+  stat_kind: string;
+  threshold: number;
+}
+
+/**
+ * Find the ONE gate a key names.
+ *
+ * Pure and exported so the grain rule is testable without a populated event log -- the bug it
+ * fixes (matching on `check_id` and taking the first hit) was invisible in every DB-free test and
+ * would have stayed invisible, because the wrong answer is a real gate with real numbers.
+ */
+export function matchGate(gates: GateGap[], key: GateKey): GateGap | undefined {
+  return gates.find(
+    (g) =>
+      g.check_id === key.check_id &&
+      g.stat === key.stat &&
+      g.stat_kind === key.stat_kind &&
+      g.threshold === key.threshold,
+  );
+}
+
 export type GenerationResult =
   | { status: 'stored'; id: string; signposting: string }
   | { status: 'rejected'; violations: Violation[] }
   | { status: 'refused'; category: string | null }
   | { status: 'malformed'; detail: string }
-  | { status: 'no_gate'; check_id: string }
+  | ({ status: 'no_gate' } & GateKey)
   | { status: 'no_evidence'; detail: string };
 
 /**
@@ -182,10 +218,15 @@ function situationQuery(stat: string): string {
  * a formatting change.
  */
 export async function buildEvidence(
-  checkId: string,
+  key: GateKey,
 ): Promise<InsightEvidence | { error: GenerationResult }> {
-  const gate = (await queryGates()).find((g) => g.check_id === checkId);
-  if (!gate) return { error: { status: 'no_gate', check_id: checkId } };
+  // ⚠️ ALL FOUR FIELDS. An earlier version matched on `check_id` alone and took the first hit,
+  // which was wrong in the quietest possible way: `ccff_j_mortar:force` is SIXTEEN gates, so it
+  // silently answered about whichever stat had the most failures and discarded the other fifteen.
+  // The insight was internally consistent, cited real records, passed every guard -- and was about
+  // a different gate than the one asked for.
+  const gate = matchGate(await queryGates(), key);
+  if (!gate) return { error: { status: 'no_gate', ...key } };
 
   const remedies = await queryRemedies(gate.stat, gate.stat_kind, gate.gap_p90);
   const passages = await retrievePassages(gate.stat, remedies);
@@ -206,6 +247,7 @@ export async function buildEvidence(
   return {
     check_id: gate.check_id,
     stat: gate.stat,
+    stat_kind: gate.stat_kind,
     threshold: gate.threshold,
     gap_p90: gate.gap_p90,
     fails: gate.fails,
@@ -227,10 +269,10 @@ export async function buildEvidence(
  * prompt rather than the product.
  */
 export async function generateInsight(
-  checkId: string,
+  key: GateKey,
   provider: InsightProvider,
 ): Promise<GenerationResult> {
-  const built = await buildEvidence(checkId);
+  const built = await buildEvidence(key);
   if ('error' in built) return built.error;
   return generateFromEvidence(built, provider);
 }
@@ -266,6 +308,7 @@ export async function generateFromEvidence(
     .values({
       checkId: evidence.check_id,
       stat: evidence.stat,
+      statKind: evidence.stat_kind,
       threshold: evidence.threshold,
       headline: i.headline,
       signposting: i.signposting,

@@ -622,8 +622,16 @@ export const insights = pgTable(
     // The gate this is about. Not a foreign key: gates are a GROUP BY over the event log, not a
     // table, so there is nothing to reference. An insight can outlive the failures that produced
     // it, which is correct -- the finding was true when it was made.
+    // ⚠️ THE GATE GRAIN IS ALL FOUR OF THESE, not check_id. Measured 2026-08-09:
+    // `ccff_j_mortar:force` alone is SIXTEEN gates -- security@25, security@30, alchemy@25,
+    // shortblade@25, luck@25 ... -- and they do not share a verdict (security@60 is `no_remedy`
+    // while acrobatics@25 is `remedy_exists`). Keying an insight on check_id alone attaches a
+    // finding about one stat to a gate about another: plausible, actionable, and wrong, with no
+    // error anywhere. `stat_kind` is in the key because skill and attribute names collide across
+    // the two enums, which is the same reason the sufficiency join carries it.
     checkId: text('check_id').notNull(),
     stat: text('stat').notNull(),
+    statKind: text('stat_kind').notNull(),
     threshold: integer('threshold').notNull(),
 
     // ── the generated content ──
@@ -658,8 +666,16 @@ export const insights = pgTable(
       'insights_signposting_ck',
       sql`${t.signposting} in ('SIGNPOSTED', 'NOT_SIGNPOSTED', 'UNCLEAR')`,
     ),
-    // The dashboard's read: approved insights for a gate, newest first.
-    index('insights_check_status_idx').on(t.checkId, t.status, t.createdAt),
+    // The dashboard's read: approved insights for a gate, newest first. Leads with the full grain
+    // so the index answers the lookup the UI actually performs.
+    index('insights_gate_status_idx').on(
+      t.checkId,
+      t.stat,
+      t.statKind,
+      t.threshold,
+      t.status,
+      t.createdAt,
+    ),
     // The review queue's read: everything still pending, oldest first.
     index('insights_status_created_idx').on(t.status, t.createdAt),
   ],

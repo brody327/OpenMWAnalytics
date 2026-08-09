@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { insights } from '../db/schema.js';
-import { generateFromEvidence, PROMPT_VERSION } from './generate.js';
+import { generateFromEvidence, matchGate, PROMPT_VERSION } from './generate.js';
 import { FakeInsightProvider } from './provider.js';
 import type { InsightEvidence } from './validate.js';
 
@@ -16,6 +16,7 @@ const CHECK_ID = 'fixture_insights_gate:persuade';
 const evidence: InsightEvidence = {
   check_id: CHECK_ID,
   stat: 'personality',
+  stat_kind: 'attribute',
   threshold: 40,
   gap_p90: 20,
   fails: 60,
@@ -132,4 +133,77 @@ test('the provider receives exactly the evidence — no hidden enrichment on the
   await generateFromEvidence(evidence, fake);
   assert.equal(fake.calls, 1);
   assert.deepEqual(fake.seen[0], evidence);
+});
+
+// ── the gate grain ────────────────────────────────────────────────────────────────────────────
+
+const g = (over: Partial<Parameters<typeof matchGate>[0][number]>) =>
+  ({
+    check_id: 'ccff_j_mortar:force',
+    stat: 'security',
+    stat_kind: 'skill',
+    threshold: 25,
+    fails: 974,
+    gap_p50: 12,
+    gap_p90: 25,
+    reliable: 0,
+    possible: 1,
+    unknown_magnitude: 0,
+    placed_remedies: 0,
+    placed_areas: 0,
+    surveyable_possible: 0,
+    ...over,
+  }) as Parameters<typeof matchGate>[0][number];
+
+test('⭐⭐ one check_id, many gates — the matcher picks the one that was ASKED FOR', () => {
+  // Real shape, measured 2026-08-09: `ccff_j_mortar:force` resolves to sixteen gates whose
+  // verdicts disagree. The original code matched on check_id and took the first hit, so asking
+  // about shortblade@25 (`no_remedy`, an authoring gap) silently answered about security@25
+  // (`gamble_only`, a tuning problem) — different diagnosis, different fix, no error.
+  //
+  // The `fails` ordering is deliberate: security is FIRST, so a check_id-only matcher returns it
+  // and this assertion fails. That is what makes the test worth having.
+  const gates = [
+    g({ stat: 'security', threshold: 25, fails: 974 }),
+    g({ stat: 'security', threshold: 60, fails: 174 }),
+    g({ stat: 'shortblade', threshold: 25, fails: 140 }),
+    g({ stat: 'personality', stat_kind: 'attribute', threshold: 25, fails: 151 }),
+  ];
+
+  const hit = matchGate(gates, {
+    check_id: 'ccff_j_mortar:force',
+    stat: 'shortblade',
+    stat_kind: 'skill',
+    threshold: 25,
+  });
+  assert.equal(hit?.stat, 'shortblade');
+  assert.equal(hit?.fails, 140);
+});
+
+test('⭐ stat_kind discriminates — a skill and an attribute of the same name are different gates', () => {
+  // Skill and attribute names collide across the two enums (07-26). Without stat_kind in the key,
+  // an attribute gate would match a skill query and credit it with the other one's remedies.
+  const gates = [
+    g({ stat: 'personality', stat_kind: 'skill', threshold: 25, fails: 10 }),
+    g({ stat: 'personality', stat_kind: 'attribute', threshold: 25, fails: 151 }),
+  ];
+
+  const hit = matchGate(gates, {
+    check_id: 'ccff_j_mortar:force',
+    stat: 'personality',
+    stat_kind: 'attribute',
+    threshold: 25,
+  });
+  assert.equal(hit?.fails, 151);
+});
+
+test('a threshold that does not exist matches nothing, rather than the nearest gate', () => {
+  const gates = [g({ threshold: 25 }), g({ threshold: 60 })];
+  const hit = matchGate(gates, {
+    check_id: 'ccff_j_mortar:force',
+    stat: 'security',
+    stat_kind: 'skill',
+    threshold: 45,
+  });
+  assert.equal(hit, undefined);
 });
