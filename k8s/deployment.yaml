@@ -101,6 +101,25 @@ spec:
                   # would sit in CreateContainerConfigError and take the WHOLE api down for a
                   # feature that is designed to degrade.
                   optional: true
+            # Insight generation for POST /insights/generate (design docs 12).
+            #
+            # `optional: true` for the SAME structural reason as OPENAI_API_KEY, but note the
+            # failure behaviour is the OPPOSITE. Search fails OPEN (lexical-only results); insight
+            # generation fails CLOSED -- providerFromEnv() returns null and the endpoint answers
+            # 503, because there is no honest half of an insight and a placeholder rendered as a
+            # finding is worse than an empty panel.
+            #
+            # So the app already refuses correctly without this key. `optional` only governs
+            # whether the POD STARTS: a hard secretKeyRef would put the entire API in
+            # CreateContainerConfigError -- taking ingestion, search and every dashboard read down
+            # -- because one authenticated, human-triggered endpoint could not run. Those are
+            # different decisions and both are deliberate.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: omwa-api-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
           # Resource governance. requests = what the scheduler reserves; limits = the hard
           # ceiling. Keeping these small leaves headroom for the k3s control plane on 1 GB.
           resources:
