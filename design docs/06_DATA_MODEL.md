@@ -889,3 +889,53 @@ the same rule as `total_gates` and `reachable: UNKNOWN`: provenance rides on the
    a finer grain than the one you recorded the discriminator at*, and the rollup collapsed past env.
    Acceptable **only** because the friction view is a demo view where mixed data is the intent. If
    friction ever needs to report a finding, `env` must join the rollup's grain first.
+
+### Seeding demo volume — `npm run seed-synthetic` (2026-08-09)
+
+`api/src/jobs/seedSynthetic.ts`. Committed rather than scratch: the local database already held
+1,000,000 seeded events and **nothing that produced them was ever committed**, so reproducing the
+demo dataset meant reverse-engineering it from the rows. A generator whose output lands on a public
+dashboard is infrastructure.
+
+- `env = 'synthetic'` is **hard-wired**, not a parameter — there is no argument that writes
+  fabricated rows as real ones. `--reset` deletes `env = 'synthetic'` only.
+- Prints its target host **before** writing, like the corpus CLI. "I thought I was pointed at
+  local" is a mistake you get to make once against production.
+- Deterministic PRNG, so two runs produce identical data and "why does this topic look odd" stays
+  answerable.
+
+⭐ **It generates SESSIONS, not rows.** `friction_rollup` classifies each failure by the *next*
+event in the same session (`lead(...) over (partition by session_id order by seq)`). Independent
+random events would fold into a rollup that is fully populated and completely meaningless — the
+"looks right vs is right" failure, manufactured on purpose. Verified end to end: the generator
+emits retry/abandon/leave at 62/26/12%, and the fold recovers **60/28/11%** from the sequences
+alone, plus small genuine `other` / `session_end` buckets.
+
+⚠️ **`received_at` is set explicitly, and must be.** The fold settles sessions on *processing*
+time. Left to `default now()`, all 180k events would claim to have arrived in the same instant — a
+session that happened 30 days ago was not received today, and every seeded session would sit inside
+the lateness window at once, so the hybrid read would compute the whole dataset live on every
+dashboard load. Seeding would look like it had made the site slow. First local run folded **12**
+sessions; after the fix, **449**.
+
+⚠️ **Artefact deliberately not reproduced:** the previous generator drew
+`skill_value = threshold − U(0,30)`, pinning `gap_p90` at 30 for every threshold — which renders as
+a flat line that reads as a bug in the *analysis*. Shortfall now scales with the threshold
+(measured: 12 → 50 across thresholds 25 → 100).
+
+**Measured:** 180,003 events in 5.9 s; **75 MB** total (46 MB heap + 29 MB indexes) after
+`VACUUM FULL`. ⚠️ The pre-vacuum figure was 600 MB — bloat left by deleting the previous million,
+not real size. Comfortably inside the 185 MB `shared_buffers`.
+
+**Ranking spread:** 40 topics with n from 1 to 266. Deliberate — shrinkage is only *visible* when a
+1-attempt topic sits beside a 266-attempt one. A uniform generator demonstrates the feature with
+the feature switched off.
+
+### ⚠️ ACCEPTED, 2026-08-09: the friction rollup will be permanently mixed
+
+The rollup has no `env` column and the fold does not filter one, so seeded events reaching prod are
+baked into the precomputed aggregates and cannot be separated without a full rebuild. The GRAIN
+rule in reverse: *you can never filter at a finer grain than the one you recorded the discriminator
+at.* Accepted deliberately — friction is a **demo** view where mixed data is the intent, and
+adding `env` to the rollup grain now would cost a migration and a rebuild for a view that does not
+report findings. ▶ If friction ever needs to state a finding, `env` joins the grain **first**.

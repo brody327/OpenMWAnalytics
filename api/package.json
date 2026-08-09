@@ -22,7 +22,8 @@
     "ingest-corpus": "node --import tsx src/corpus/ingestCli.ts",
     "bench-recall": "node --import tsx src/corpus/benchRecall.mts",
     "verify-corpus": "node --import tsx src/corpus/verifyCorpus.mts",
-    "ingest-survey": "node --import tsx src/corpus/surveyIngestCli.mts"
+    "ingest-survey": "node --import tsx src/corpus/surveyIngestCli.mts",
+    "seed-synthetic": "node --import tsx src/jobs/seedSynthetic.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
