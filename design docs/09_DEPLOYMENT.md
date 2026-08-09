@@ -35,6 +35,19 @@ was already deploy-shaped — the egress design paid off here.
 
 ## 2. Target topology
 
+> ⚠️ **AWS region: `us-east-2` (Ohio). Elastic IP `16.58.59.201`.**
+>
+> Written here because it was not written anywhere — it appeared exactly once in this document,
+> buried inside an RDS tunnel command, and cost a debugging session on 2026-08-09 when the EC2
+> console opened on the default `us-east-1` and showed **no instances**. The list is per-region, so
+> an empty one means "wrong region", not "nothing is running" — and in that instance the API was
+> serving 200s and SSH was answering the whole time.
+>
+> If the console ever shows nothing, confirm the box is alive from outside before believing it:
+> `curl -s -o /dev/null -w '%{http_code}' https://api.omwanalytics.com/health` and
+> `ssh-keyscan -T 5 16.58.59.201`. Reverse DNS also names the region:
+> `nslookup 16.58.59.201` → `ec2-16-58-59-201.us-east-2.compute.amazonaws.com`.
+
 | Component | Host | Why |
 | --- | --- | --- |
 | **API** (Express, Dockerized) | **k3s** on one **AWS EC2** VM (Linux) | exercises cloud + Docker + Kubernetes + Linux admin on one cheap/free box |

@@ -126,6 +126,19 @@ Print only host/port/db/user. `DATABASE_SSL=true` is required against RDS.
 
 ---
 
+## Production, in one line
+
+**AWS `us-east-2` (Ohio)** · EC2 + k3s at elastic IP **`16.58.59.201`** · RDS Postgres ·
+`api.omwanalytics.com` (API) / `omwanalytics.com` (dashboard) · `sudo kubectl` on the box (k3s.yaml
+is root-only) · **stop the instance between sessions — `t3.small` is not free.**
+
+⚠️ The **region** is here because it was nowhere: the EC2 console defaults to `us-east-1` and shows
+an empty instance list, which reads as "everything is gone". It is not — the list is per-region.
+Confirm from outside before believing the console:
+`curl -s -o /dev/null -w '%{http_code}' https://api.omwanalytics.com/health`.
+
+---
+
 ## Reference environment
 
 - OpenMW 0.51 offline Lua API docs: `H:\OpenMW 0.51.0\Docs\` (prefer over
