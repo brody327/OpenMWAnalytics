@@ -335,3 +335,72 @@ jobs:
           done
           echo "::error::Deploy reported success but the ingress never served $GITHUB_SHA."
           exit 1
+
+  # ---------------------------------------------------------------------------
+  # 4. SMOKE -- does the DASHBOARD still work against the API we just shipped?
+  # ---------------------------------------------------------------------------
+  # /version proves the right image is serving. It does not prove the thing is USEFUL: the pod
+  # can be the correct build and still return a renamed field, an empty array, or a 500 on one
+  # route. The dashboard is the only consumer that exercises those response shapes end to end,
+  # and it deploys separately -- so an API change can break it without either pipeline noticing.
+  #
+  # ⚠️ Stated plainly: this runs AFTER the rollout, so it cannot prevent a bad deploy. It converts
+  # a silent breakage into a red run. Gating properly would need a staging environment, which this
+  # project does not have and does not need at one user.
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Chromium only. The other two engines triple the install time to re-test assertions that
+      # are about data and page structure, not rendering.
+      - name: Install Chromium
+        run: npx --workspace dashboard playwright install --with-deps chromium
+
+      - name: E2E against production
+        working-directory: dashboard
+        run: npx playwright test --reporter=list,json
+        env:
+          BASE_URL: https://omwanalytics.com
+          PLAYWRIGHT_JSON_OUTPUT_NAME: results.json
+          CI: 'true'
+
+      # ⭐ THE CHECK ON THE CHECK. A Playwright run that collects ZERO tests exits 0, so every
+      # failure mode that produces no tests -- a bad testDir, a renamed file, a glob that stops
+      # matching, a spec that fails to import -- shows up as a GREEN smoke job. That is exactly
+      # the "green because nothing ran" shape this pipeline has already been bitten by twice
+      # (a mutable tag that triggered no rollout; a path filter that queued no run).
+      #
+      # The floor is 8 against a current 11: high enough that an entire spec file dropping out
+      # (the smaller is 5) fails here, low enough that deleting one obsolete test does not.
+      - name: Assert the suite actually ran
+        if: always()
+        working-directory: dashboard
+        run: |
+          set -eu
+          test -f results.json || { echo "::error::no Playwright report was written"; exit 1; }
+          # Node, not jq: the count must be right at ANY describe-nesting depth, and a
+          # fixed-depth expression would silently undercount the day someone adds a level.
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("results.json", "utf8"));
+            const walk = (s) => (s.specs ?? []).length + (s.suites ?? []).reduce((a, x) => a + walk(x), 0);
+            const n = (r.suites ?? []).reduce((a, s) => a + walk(s), 0);
+            console.log(`collected ${n} specs`);
+            if (n < 8) { console.log(`::error::expected >=8 E2E specs, collected ${n}`); process.exit(1); }
+          '
+
+      - name: Upload the report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: dashboard/playwright-report/
+          retention-days: 7

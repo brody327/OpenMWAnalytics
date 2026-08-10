@@ -30,5 +30,15 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // ⚠️ `vitest.config.ts` is excluded from Next's build typecheck, and ONLY that file.
+  //
+  // Next 16 and Vitest each bring their own copy of Vite (Next's is the rolldown build), so
+  // `@vitejs/plugin-react` returns a `Plugin` from one copy and `defineConfig` expects the
+  // other's. It is a duplicate-types problem, not a real one — Vitest runs fine — but it fails
+  // `next build`, which typechecks every file in `include`.
+  //
+  // The narrow exclusion is the point: the test FILES stay typechecked by both `tsc` and the
+  // build, so a fixture drifting from a real type is still a compile error. Only the runner's
+  // own config, which Vitest validates at startup on every run, drops out.
+  "exclude": ["node_modules", "vitest.config.ts"]
 }

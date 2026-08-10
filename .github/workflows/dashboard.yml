@@ -1,0 +1,59 @@
+name: dashboard
+
+# Typecheck, unit-test and build the Next.js dashboard.
+#
+# ⚠️ WHY THIS IS A SEPARATE WORKFLOW. `build-api.yml` is path-filtered to the things the API
+# image is built from, so a dashboard-only commit correctly triggers no run there — which meant
+# the dashboard had no CI at all. Widening the API filter instead would be worse: every dashboard
+# tweak would build and DEPLOY a new API image for no reason.
+#
+# The rule is the same one written on the API's path filter: a filter that omits a build input
+# does not warn. Anything that can change what the dashboard renders belongs in the list below.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - 'package-lock.json'
+      - 'package.json'
+      - '.github/workflows/dashboard.yml'
+  pull_request:
+    paths:
+      - 'dashboard/**'
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Unit tests first: they need no build and no network, so a broken component fails in
+      # seconds rather than after a full Next compile.
+      - name: Unit tests (Vitest + jsdom)
+        run: npm test --workspace dashboard
+
+      # ⭐ The check on the check, same as the E2E smoke job. `vitest run` over zero matched files
+      # exits 0, so a renamed suffix or a broken glob would read as green.
+      - name: Assert the suite actually ran
+        run: |
+          set -eu
+          n=$(npx --workspace dashboard vitest list 2>/dev/null | grep -c ' > ' || true)
+          echo "collected $n tests"
+          [ "$n" -ge 12 ] || { echo "::error::expected >=12 unit tests, collected $n"; exit 1; }
+
+      # `next build` runs the project typecheck, so this covers tsc as well as compilation.
+      - name: Build
+        run: npm run build --workspace dashboard
+        env:
+          # The build must not depend on a reachable API: pages are dynamic (`ƒ`) and fetch at
+          # request time. If this ever starts failing without the API up, something became
+          # build-time that should not be.
+          NEXT_PUBLIC_API_BASE: https://api.omwanalytics.com

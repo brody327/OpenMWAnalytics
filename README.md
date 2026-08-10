@@ -123,13 +123,15 @@ which is the property `/health` lacks.
 
 ## Testing
 
-Three layers, chosen for what each can actually detect — **117 API tests** (unit + HTTP-level
-against a real Postgres), **14 shipper reliability tests**, and **11 Playwright E2E tests** asserting invariants against a running
-deployment. New guards are mutation-checked: broken deliberately to confirm they go red, then
-reverted to confirm they go green.
+**159 tests in five layers**, each chosen for what it can actually detect — **117 API** (unit +
+HTTP-level against a real Postgres), **14 shipper reliability**, **17 component** (Vitest + jsdom),
+and **11 Playwright E2E** asserting invariants against a running deployment. New guards are
+mutation-checked: broken deliberately to confirm they go red, then reverted to confirm they go
+green. Both CI suites also assert a **minimum collected test count**, because a runner that
+matches zero files exits 0.
 
 ```bash
-npm test                                    # 131: api (117) + shipper (14)
+npm test                                    # 148: api (117) + shipper (14) + dashboard (17)
 npm test --workspace api                    # needs Postgres for the DB-backed subset
 npm run test:e2e --workspace dashboard      # 11, against a live stack
 ```

@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { GateCard } from '../components/GateCard';
+import { GateList } from '../components/GateList';
 import { gateKey, getInsights, getSufficiency } from '../lib/gaps';
 
 // /gaps — content sufficiency (design docs 10 Q3.6, 12).
@@ -82,11 +82,7 @@ export default async function GapsPage() {
               No failed checks recorded yet — nothing to analyse.
             </p>
           ) : (
-            <ul className="mt-6 space-y-4">
-              {suff.gates.map((g) => (
-                <GateCard key={gateKey(g)} gate={g} insight={byGate.get(gateKey(g))} />
-              ))}
-            </ul>
+            <GateList gates={suff.gates} byGate={byGate} />
           )}
         </>
       )}

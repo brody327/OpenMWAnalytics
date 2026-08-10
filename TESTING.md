@@ -1,6 +1,6 @@
 # Testing
 
-Four layers, each chosen for what it can actually detect. The organising rule is the same one the
+Five layers, each chosen for what it can actually detect. The organising rule is the same one the
 rest of the project runs on:
 
 > **A check is only worth what it can detect.** Before trusting a green check, ask: *would this also
@@ -11,16 +11,18 @@ absent.
 
 ---
 
-## The four layers
+## The five layers
 
 | Layer | What | Needs | Command |
 | --- | --- | --- | --- |
 | **Unit** | Pure logic — scoring, classification, validation, parsers | nothing | `npm test --workspace api` |
 | **HTTP** | The real Express app over real HTTP: routing, middleware order, auth, rate limiting, idempotency | Postgres | included in the above |
 | **Shipper** | At-least-once delivery, durable offset, relaunch detection | nothing | `npm test --workspace shipper` |
+| **Component** | The `'use client'` slice: URL⇄form state, and the React-key check | nothing | `npm test --workspace dashboard` |
 | **E2E** | Rendered pages against a running deployment | a live stack | `npm run test:e2e --workspace dashboard` |
 
-**117 API tests. 14 shipper tests. 11 E2E tests.**
+**117 API · 14 shipper · 17 component · 11 E2E — 159 tests.** `npm test` at the root runs the
+first four; E2E is separate because it needs something deployed.
 
 ### 1. Unit — the judgement, extracted on purpose
 
@@ -92,19 +94,61 @@ Two small changes made the file testable: `OMWA_LOG` / `OMWA_STATE_FILE` overrid
 never touches the developer's real log or checkpoint), and guarding the startup block so importing
 the module does not begin polling and leave timers open.
 
-### 4. E2E — rendered pages, real stack
+### 4. Component — the browser-side slice, and the check only a dev build can make
+
+`npm test --workspace dashboard` (Vitest + jsdom + React Testing Library).
+
+Most of this app is `async` Server Components, and jsdom has nothing useful to say about those —
+see the Playwright note below. Three files earn a component test:
+
+**`EventFilters`** holds no filter state. It reads filters from the URL and writes new ones back,
+and the answer arrives as fresh props from the server. So its entire observable behaviour is *the
+URL it hands the router*, and asserting on that is asserting on the component's actual job.
+
+- ⭐⭐ **Changing a filter drops the `cursor`.** A cursor encodes a position within a specific
+  ordering of a specific result set. Carried across a filter change it points into a result set
+  that no longer exists — the page then returns a wrong slice, with no error, no empty state, and
+  entirely plausible rows. Nothing else in the system would catch it.
+- **Clearing a filter deletes the param** rather than setting it empty. `?type=` is not the same
+  request as no `type`: the empty string still travels upstream, and the failure looks like
+  "there is no data".
+- Draft session-id commits **on submit, not per keystroke** — otherwise a 36-character uuid costs
+  36 round-trips and 36 history entries, and Back needs 36 presses to undo one filter.
+
+**`SearchBox`** — every test is a case where it must decide *not* to search. Hybrid retrieval is
+the most expensive query in the platform (tsvector + HNSW probe + RRF fusion), so a needless
+search is a wasted round of the costliest work the API does.
+
+⚠️ **Honest note, found by mutation:** an empty box is blocked *twice* — the submit guard and the
+disabled button — so the two "empty does not search" tests stay green if either layer alone is
+removed. They pin the user-visible contract but cannot detect a single-layer regression. A third
+test submits the form directly, past the button, to isolate the guard. This is written down
+rather than left as a comfortable assumption.
+
+**`GateList`** exists as a component *because of its test.* The `key=` was inline in
+`app/gaps/page.tsx`, an `async` Server Component that cannot be rendered in a test — and a test
+that re-implemented the `.map()` would assert on its own copy of the code. Extracting the list
+puts the real `key={gateKey(g)}` somewhere a test can reach it.
+
+Why it needs this layer at all: React only emits the duplicate-key warning in a **development**
+build. Playwright drives `next start`, a production build, which strips it — so this check is
+unavailable at the E2E layer by construction. It was a documented gap until Vitest existed here.
+
+### 5. E2E — rendered pages, real stack
 
 ```bash
 npm run test:e2e --workspace dashboard                    # against production
 BASE_URL=http://localhost:3000 npx playwright test        # against a local build
 ```
 
-**Why Playwright and not Jest + React Testing Library.** Almost every page is an `async` Server
-Component that fetches on the server and renders once. RTL has no good story for those — you end up
-mocking the fetch layer until the test asserts your own mocks, which is a check that cannot fail.
-Seven `'use client'` components are unit-testable and two are worth it, but that is a small slice.
+**Why Playwright carries the pages, and RTL only the client slice.** Almost every page is an
+`async` Server Component that fetches on the server and renders once. RTL has no good story for
+those — you end up mocking the fetch layer until the test asserts your own mocks, which is a check
+that cannot fail. For a mostly-SSR app the honest unit of verification is a rendered page.
 
-For a mostly-SSR app the honest unit of verification is a rendered page.
+The division is by what each tool can actually detect, not by preference: **jsdom for the things
+that need a development React build or a simulated interaction** (layer 4), **a real browser
+against a real render for everything else**.
 
 **These assert invariants, not snapshots.** The manual checks run while building were
 snapshot-shaped — *"exactly 6 gate cards"* — which breaks the moment someone plays the game. Every
@@ -138,6 +182,11 @@ Done so far, both directions each time:
 | Number whitelist | neuter the condition | 2 tests fail |
 | Banner absent from `/gaps` | inject `<SyntheticBanner />` into the page | E2E fails, `Received: 1` |
 | Post-then-checkpoint | advance the offset regardless of POST success | 2 shipper tests fail |
+| Gate React key | `key={gateKey(g)}` → `key={g.check_id}` | 1 test fails, the other 2 stay green |
+| Cursor reset on filter change | delete the `params.delete('cursor')` line | 1 test fails |
+| Delete-vs-empty param | `params.delete(key)` → `params.set(key, '')` | 2 tests fail |
+| SearchBox submit guard | remove the trim/duplicate early return | 2 tests fail (see the caveat above) |
+| E2E spec-count floor | report with one spec file, then with none | fails at 6, 5, and 0 |
 | The `env` filter | — | verified by data: `real` 3 gates vs `all` 6,687 |
 
 The reverse direction matters as much. After each mutation the change is reverted and the test must
@@ -162,23 +211,46 @@ Being explicit, because an unexplained gap looks like an oversight:
 
 ### ⚠️ Known gaps, ranked
 
-1. **`EventFilters` and `SearchBox`** — real client-side logic (URL state ↔ form state,
-   submit-only semantics) with no coverage.
-2. **The React-key half of the gate-grain bug.** The E2E test asserts rendered cards are unique on
-   `(check_id, stat, stat_kind, threshold)`, which catches duplicated *cards* — but reverting
-   `key={gateKey(g)}` to `key={g.check_id}` still renders distinct DOM, and React strips
-   duplicate-key warnings from production builds. Catching that needs a dev-server run asserting on
-   console output. Recorded rather than quietly overclaimed.
-3. **E2E is not in CI.** It needs a browser download and hits production. The natural home is a
-   post-deploy smoke step after the existing `/version` assertion.
+The three gaps this section used to list — the client components, the React-key check, and E2E in
+CI — are now layers 4 and 5 and the `smoke` job. What is left:
+
+1. **A filter change is never verified end to end.** Layer 4 proves the component asks for the
+   right URL; layer 5 proves pages render. Nothing clicks a filter in a real browser and confirms
+   the *feed changes accordingly*, so a broken `/api/events` cursor contract would slip both.
+2. **The `smoke` job runs after the rollout**, so it reports rather than prevents. Gating properly
+   needs a staging environment, which this project does not have and does not need at one user.
+3. **No coverage measurement anywhere.** Deliberate — a coverage number invites writing tests to
+   raise it, which is how suites fill up with checks that cannot fail. The gap is recorded because
+   "we chose not to" and "we forgot" should not look the same.
+4. **`ConfrontationDashboard` is reached through a registry** (`modDashboards.ts`), so a mod whose
+   key is missing renders nothing with no error. Untested, and easy to get wrong.
 
 ---
 
 ## CI
 
-`.github/workflows/build-api.yml` runs the API suite on every push to `main` that touches the API,
-**before** building the image — with a `pgvector/pgvector:pg16` service container, because
-`corpus/ingest.test.ts` and `http.test.ts` need a real database.
+Two workflows, split by what each one deploys.
+
+**`build-api.yml`** — API suite → image → rollout → verify → smoke. The suite runs on every push
+to `main` that touches the API, **before** building the image, with a `pgvector/pgvector:pg16`
+service container because `corpus/ingest.test.ts` and `http.test.ts` need a real database.
+
+**`dashboard.yml`** — typecheck, Vitest and `next build` on dashboard changes. It is a separate
+workflow rather than a wider path filter on the API one: widening that filter would build and
+**deploy a new API image** for every dashboard tweak. Before this existed the dashboard had no CI
+at all, because the API's path filter correctly ignored it.
+
+⭐ **Both suites are guarded against passing vacuously.** `vitest run` over zero matched files
+exits 0, and so does a Playwright run that collects no tests — so a renamed suffix or a broken
+glob would read as green. Each job asserts a **minimum collected count** after running. That is
+the same failure shape this pipeline has already been bitten by twice: a mutable tag that
+triggered no rollout, and a path filter that queued no run. Nothing errored either time; the
+Actions tab was simply empty.
+
+The E2E `smoke` job runs after the rollout and drives the deployed dashboard against the API that
+was just shipped. `/version` proves the right *image* is serving; it cannot prove the thing is
+*useful* — the correct build can still return a renamed field or a 500 on one route, and the
+dashboard is the only consumer that exercises those response shapes.
 
 That gate exists because automating the rollout removed one nobody had designed: previously a human
 had to SSH in and restart the deployment, and would presumably not do that with a red suite.
