@@ -6,6 +6,7 @@
   "type": "module",
   "description": "OpenMW Analytics — log-tailing shipper: tails openmw.log, extracts OMWA1 events, POSTs to the ingest API.",
   "scripts": {
-    "start": "node ship.mjs"
+    "start": "node ship.mjs",
+    "test": "node --test ship.test.mjs"
   }
 }

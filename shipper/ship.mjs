@@ -21,7 +21,10 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const LOG = process.argv[2] ?? 'C:\\Documents\\My Games\\OpenMW\\openmw.log';
+// argv wins (the documented way to run it), then env, then the default install path. The env
+// fallback exists so a test can point at a temp log — argv[2] belongs to the test runner.
+const LOG =
+  process.argv[2] ?? process.env.OMWA_LOG ?? 'C:\\Documents\\My Games\\OpenMW\\openmw.log';
 const API = process.env.OMWA_API ?? 'http://localhost:4000/events';
 // Shared bearer token for the authenticated ingest path. Kept in the environment, never
 // in the repo. Unset is legal for a local API that is also unconfigured.
@@ -31,7 +34,11 @@ const TOKEN = process.env.OMWA_INGEST_TOKEN ?? '';
 // unlabelled shipper is treated as real -- forgetting the flag then shows up in the player
 // set where it is visible and correctable, rather than being silently dropped.
 const ENV = (process.env.OMWA_ENV ?? 'prod').toLowerCase();
-const STATE = fileURLToPath(new URL('./.ship-state.json', import.meta.url));
+// Overridable so a test can point the checkpoint at a temp directory. Without this the only way
+// to exercise the durable-offset logic would be to clobber the developer's real checkpoint, which
+// is the kind of test nobody runs twice.
+const STATE =
+  process.env.OMWA_STATE_FILE ?? fileURLToPath(new URL('./.ship-state.json', import.meta.url));
 const SENTINEL = 'OMWA1 ';
 const POLL_MS = 1000;
 
@@ -189,6 +196,9 @@ async function pump() {
 
 // Startup: resume from a durable checkpoint if we have one; else start at EOF so a
 // large pre-existing log isn't replayed on first run.
+const IS_ENTRYPOINT = process.argv[1]?.endsWith("ship.mjs");
+
+if (IS_ENTRYPOINT) {
 if (loadState()) {
   console.log(`[shipper] resumed from checkpoint: offset=${offset}`);
 } else {
@@ -198,6 +208,7 @@ if (loadState()) {
 console.log(`[shipper] tailing ${LOG}`);
 console.log(`[shipper] posting to ${API} (env=${ENV})`);
 setInterval(pump, POLL_MS);
+}
 
 // --- liveness heartbeat (design docs 04) ----------------------------------
 //
@@ -284,5 +295,26 @@ async function heartbeat() {
   }
 }
 
-heartbeat();
-setInterval(heartbeat, HEARTBEAT_MS);
+if (IS_ENTRYPOINT) {
+  heartbeat();
+  setInterval(heartbeat, HEARTBEAT_MS);
+}
+
+// --- test surface ---------------------------------------------------------
+//
+// ⚠️ The intervals above start on IMPORT, which makes this file untestable: importing it from a
+// test would begin polling a real log and posting to a real API, and leave two handles open that
+// keep the runner alive forever. The startup block is therefore guarded to run only when this
+// module is the process entrypoint — same pattern, and same reason, as `api/src/index.ts`.
+//
+// `post` is deliberately NOT injected. Tests stub `globalThis.fetch` instead, so the real
+// post-then-checkpoint path runs — including the 2xx check that decides whether the offset moves.
+// Injecting a fake `post` would test the injection.
+export { extract, fileFingerprint, pump, loadState, saveState };
+export const _state = {
+  get offset() { return offset; },
+  set offset(v) { offset = v; },
+  get fingerprint() { return fingerprint; },
+  set fingerprint(v) { fingerprint = v; },
+  get installId() { return installId; },
+};

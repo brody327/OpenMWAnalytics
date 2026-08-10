@@ -16,6 +16,7 @@
   },
   "scripts": {
     "api": "npm run dev --workspace api",
-    "ship": "npm run start --workspace shipper"
+    "ship": "npm run start --workspace shipper",
+    "test": "npm test --workspace api && npm test --workspace shipper"
   }
 }

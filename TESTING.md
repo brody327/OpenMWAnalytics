@@ -1,6 +1,6 @@
 # Testing
 
-Three layers, each chosen for what it can actually detect. The organising rule is the same one the
+Four layers, each chosen for what it can actually detect. The organising rule is the same one the
 rest of the project runs on:
 
 > **A check is only worth what it can detect.** Before trusting a green check, ask: *would this also
@@ -11,15 +11,16 @@ absent.
 
 ---
 
-## The three layers
+## The four layers
 
 | Layer | What | Needs | Command |
 | --- | --- | --- | --- |
 | **Unit** | Pure logic — scoring, classification, validation, parsers | nothing | `npm test --workspace api` |
 | **HTTP** | The real Express app over real HTTP: routing, middleware order, auth, rate limiting, idempotency | Postgres | included in the above |
+| **Shipper** | At-least-once delivery, durable offset, relaunch detection | nothing | `npm test --workspace shipper` |
 | **E2E** | Rendered pages against a running deployment | a live stack | `npm run test:e2e --workspace dashboard` |
 
-**117 API tests. 11 E2E tests.**
+**117 API tests. 14 shipper tests. 11 E2E tests.**
 
 ### 1. Unit — the judgement, extracted on purpose
 
@@ -65,7 +66,33 @@ What it pins, and why each one is worth a line:
 - **`/insights` is approved-only** — asserted against `?status=pending`, `?status=all`, `?env=all`.
   "Human review" is only a real claim if no query parameter can widen the filter.
 
-### 3. E2E — rendered pages, real stack
+### 3. Shipper — the guarantees, exercised by breaking things
+
+`shipper/ship.test.mjs`. This is the most specific claim in the project — *at-least-once via
+post-then-checkpoint, a durable offset, relaunch detection by first-line fingerprint* — and every
+part of it is a statement about what happens when something goes **wrong**. None of it can be
+confirmed by watching the shipper work on a good day.
+
+⭐ **`post()` is not stubbed; `globalThis.fetch` is.** The real post-then-checkpoint path runs,
+including the 2xx check that decides whether the offset moves. Faking `post` would test the fake.
+
+- **A failed POST leaves the offset put** — and the next poll re-sends the same events. Both halves,
+  because "the offset stayed" is worthless if the retry never happens.
+- **A half-written trailing line is not consumed** — tailing a file the game is actively writing
+  *will* catch a line mid-flush. Consuming it would parse half a JSON object and advance past the
+  rest, losing the event with only a warning. Paired with: once the line completes, it ships.
+- **A relaunch reships from the top even when the new file is LARGER.** This is why the design
+  fingerprints the first line rather than checking `size < offset`: a new session can pass the old
+  offset before the first poll, and size alone would silently skip the start of every session.
+- **A truncation resets too** — same banner, fewer bytes, which only the size check can catch.
+- **`loadState` resumes from the checkpoint**, not EOF. Starting at EOF is correct only on a first
+  run with no checkpoint.
+
+Two small changes made the file testable: `OMWA_LOG` / `OMWA_STATE_FILE` overrides (so a test
+never touches the developer's real log or checkpoint), and guarding the startup block so importing
+the module does not begin polling and leave timers open.
+
+### 4. E2E — rendered pages, real stack
 
 ```bash
 npm run test:e2e --workspace dashboard                    # against production
@@ -110,6 +137,7 @@ Done so far, both directions each time:
 | Citation `lower()` in the insight validator | remove the `toLowerCase()` | 4 tests fail |
 | Number whitelist | neuter the condition | 2 tests fail |
 | Banner absent from `/gaps` | inject `<SyntheticBanner />` into the page | E2E fails, `Received: 1` |
+| Post-then-checkpoint | advance the offset regardless of POST success | 2 shipper tests fail |
 | The `env` filter | — | verified by data: `real` 3 gates vs `all` 6,687 |
 
 The reverse direction matters as much. After each mutation the change is reverted and the test must
@@ -134,17 +162,14 @@ Being explicit, because an unexplained gap looks like an oversight:
 
 ### ⚠️ Known gaps, ranked
 
-1. **The shipper has no tests**, and it carries the most specific claim in the project:
-   *at-least-once with durable offsets, post-then-checkpoint, and recreated-file detection.* Today
-   that is verified only by having run it. **This is the next thing to close.**
-2. **`EventFilters` and `SearchBox`** — real client-side logic (URL state ↔ form state,
+1. **`EventFilters` and `SearchBox`** — real client-side logic (URL state ↔ form state,
    submit-only semantics) with no coverage.
-3. **The React-key half of the gate-grain bug.** The E2E test asserts rendered cards are unique on
+2. **The React-key half of the gate-grain bug.** The E2E test asserts rendered cards are unique on
    `(check_id, stat, stat_kind, threshold)`, which catches duplicated *cards* — but reverting
    `key={gateKey(g)}` to `key={g.check_id}` still renders distinct DOM, and React strips
    duplicate-key warnings from production builds. Catching that needs a dev-server run asserting on
    console output. Recorded rather than quietly overclaimed.
-4. **E2E is not in CI.** It needs a browser download and hits production. The natural home is a
+3. **E2E is not in CI.** It needs a browser download and hits production. The natural home is a
    post-deploy smoke step after the existing `/version` assertion.
 
 ---
