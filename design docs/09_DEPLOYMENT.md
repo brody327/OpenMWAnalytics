@@ -1,16 +1,18 @@
 # 09 — Deployment & Hosting
 
-**Status:** 🟢 **the API is publicly live at `https://api.omwanalytics.com`** (2026-07-20).
-CI/CD (Actions→GHCR), the k3s Deployment/Service, RDS networking + TLS, the schema
-migration, and the public Ingress with an auto-renewing Let's Encrypt certificate are all
-done and verified from the open internet. Wiring the dashboard/shipper to the public URL
-(and populating real data) is the remaining work.
-Live step-by-step state and the exact resume point are tracked in agent memory
-(`project-deployment-plan`); this doc records the *design*.
+**Status:** 🟢 **fully live and continuously deployed** (API `https://api.omwanalytics.com`,
+dashboard `https://omwanalytics.com`). CI/CD (Actions→GHCR), the k3s Deployment/Service, RDS
+networking + TLS, schema migration in the deploy path, and the public Ingress with an
+auto-renewing Let's Encrypt certificate are all done and verified from the open internet. The
+shipper and dashboard are wired to the public URL and carrying real data.
 
-Also a deliberate learning target: the job baseline's "What Sets You Apart" line —
-**"cloud infrastructure, Docker/Kubernetes, and CI/CD."** Dosed to *demonstrate*, not
-to become an infra specialist (one node, not a fleet).
+As of 2026-08-10 a push to `main` reaches production in **~3.2 min**, ending in two checks a
+broken deploy cannot pass: `/version` asserted through the ingress (§10) and an E2E smoke run
+against the deployed dashboard (§11).
+
+**Scope, deliberately:** one node, not a fleet. Enough to exercise cloud + Docker + Kubernetes +
+CI/CD honestly; not an attempt to be infrastructure. Where that trade bites — single replica,
+in-memory rate limiting, no HA — it is named rather than hidden.
 
 ---
 
@@ -742,3 +744,78 @@ second and converts this entire class of failure from archaeology into a diff.
 > **The general rule, third instance this session:** when two things are supposed to match and one
 > of them is invisible, the bug is unfindable by staring at the visible one. Print the invisible
 > half. Cf. `/health` vs `/version`, and the deploy step whose stderr went to `/dev/null`.
+
+---
+
+## 11. Two CI gaps closed (2026-08-10) — and both were "green because nothing ran"
+
+§10 ended the rollout gap: CI now deploys and asserts through the ingress that the running build is
+the commit just pushed. Two holes remained, and they are the *same* hole in different costumes.
+
+### 11.1 The dashboard had no CI at all
+
+`build-api.yml` is path-filtered to what the API image is built from. That filter is correct — and
+it meant a dashboard-only commit triggered **no run anywhere**. Nothing errored; the Actions tab was
+simply empty, which is indistinguishable from "nothing needed doing".
+
+Widening the API filter was the obvious fix and the wrong one: every dashboard tweak would then
+build **and deploy a new API image** for no reason. Instead there is now a separate
+**`dashboard.yml`** — typecheck, Vitest, `next build` — on dashboard paths.
+
+> This is the third time this project has been bitten by a *filter or trigger pointed at the wrong
+> thing*: a mutable tag that triggered no rollout (§10), a path filter that queued no run for a
+> lockfile fix (08-09), and now a whole workspace with no pipeline. In each case the system did
+> exactly what it was configured to do.
+
+### 11.2 `/version` proves the image, not that it is useful
+
+A pod can be the correct build and still return a renamed field, an empty array, or a 500 on one
+route. The **dashboard is the only consumer that exercises those response shapes end to end**, and
+it deploys separately — so an API change can break it without either pipeline noticing.
+
+A **`smoke`** job now runs the Playwright suite against the deployed dashboard after every rollout.
+
+⚠️ **Stated in the workflow, not just here: it runs *after* the rollout, so it reports rather than
+prevents.** Gating properly needs a staging environment, which is not justified at one user. Naming
+the limit is the point — an unqualified "we have E2E in CI" would overclaim.
+
+### 11.3 ⭐ The check on the check
+
+**A test runner that matches zero files exits 0.** `vitest run` does, and so does a Playwright run
+that collects nothing. Every failure mode that produces *no tests* — a renamed suffix, a bad
+`testDir`, a glob that stops matching, a spec that fails to import — would have shown up as a green
+job.
+
+Both suites now assert a **minimum collected test count** after running. The E2E floor is 8 against
+a current 11: high enough that an entire spec file dropping out (the smaller holds 5) fails, low
+enough that deleting one obsolete test does not.
+
+Verified in both directions against real report files: 11 passes; one spec file alone gives 6 and 5,
+both fail; zero collected fails; a missing report fails. Counting is done in Node rather than `jq`
+because a fixed-depth expression would silently undercount the day someone adds a `describe` level.
+
+### 11.4 The lockfile was Windows + Linux only
+
+TypeScript 7 is the Go port, so the compiler ships as a per-platform binary through
+`optionalDependencies`. The lockfile carried `win32-x64` and `linux-x64` and nothing else.
+
+⚠️ **The failure mode is why this survived a working CI pipeline.** Because they are *optional*,
+`npm ci` does not fail: it reports success, silently **removes** the non-matching binary, installs
+no replacement, and exits 0. The break surfaces later and elsewhere, as `Unable to resolve
+@typescript/typescript-darwin-arm64` from the first `tsc` or `next build`.
+
+Found by asking whether the repo could be picked up on another machine, and confirmed with the
+observation the failure cannot produce: `npm ci --dry-run --os=<os> --cpu=<cpu>` per platform.
+Before, darwin-arm64/darwin-x64/linux-arm64 each reported *"remove typescript-win32-x64"* and added
+nothing. `darwin-arm64`, `darwin-x64`, `linux-arm64` and `win32-arm64` added with `resolved` +
+`integrity` fetched from the registry.
+
+### Measured pipeline, commit `337e20b`
+
+| Job | |
+| --- | --- |
+| `test` | 46 s |
+| `build-and-push` | 52 s |
+| `deploy` (SSM → rollout → `/version`) | 31 s |
+| `smoke` (Chromium install + 11 E2E + count guard) | 56 s |
+| **push → serving** | **3.2 min** |

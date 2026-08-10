@@ -36,12 +36,23 @@ the cases where running the thing contradicted the design.
 4. Record a decision where it belongs *first*, then reflect impacts elsewhere.
 5. Do not update a design doc until a decision is actually made.
 
-## Current status (2026-08-09) — PHASE 4 COMPLETE
+## Current status (2026-08-10) — PHASE 4 COMPLETE, AND NOW TESTED
 
 **Every phase of the plan is built, deployed and verified from outside.**
 [omwanalytics.com](https://omwanalytics.com) leads with a real finding; the loop runs
 game → `openmw.log` → shipper → API → Postgres → dashboard, with a second pipeline joining
 telemetry to the game's own data files.
+
+A push to `main` reaches production in **~3.2 min** and ends in two checks a broken deploy cannot
+pass: `/version` asserted through the public ingress, and an E2E run against the deployed site.
+
+| Shipped 2026-08-10 | |
+| --- | --- |
+| **Test suite: 159 across five layers** (`TESTING.md`) | 117 API · 14 shipper · 17 component · 11 E2E. Every new guard **mutation-checked** — broken on purpose to confirm it goes red, then reverted |
+| **Shipper reliability, finally verified** (`04 §4`) | The project's most specific claim was previously checked only by having run it. 14 tests, `fetch` stubbed rather than `post`, so the real post-then-checkpoint path executes |
+| **Dashboard CI + post-deploy smoke** (`09 §11`) | The dashboard had *no* pipeline; `/version` proved the image, not that it was useful. ⭐ Both suites assert a **minimum collected test count** — a runner matching zero files exits 0 |
+| **Three client-side defects** (`07 §11`) | Lint was red on `main`: a colour-scheme flash in three chart files (now `useSyncExternalStore`), a dead `useEffect` that forgot `loading`, and the React-key half of the gate-grain bug |
+| **Lockfile was Windows+Linux only** (`09 §11.4`) | A fresh clone on macOS or ARM had no TypeScript compiler. `npm ci` reported success and installed nothing, because the binaries are *optional* deps |
 
 | Shipped 2026-08-09 | |
 | --- | --- |

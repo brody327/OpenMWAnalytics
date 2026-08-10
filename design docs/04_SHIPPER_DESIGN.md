@@ -81,11 +81,37 @@ skips whatever preceded shipper start — acceptable; that history predates the 
 
 ## 4. Verification
 
-Reliability logic is covered by a deterministic harness (mock API + synthetic log,
-`scratchpad/test-shipper.mjs`) that asserts all three fixes: ships appended events +
-writes a checkpoint (D2), reships after a first-line change / truncation (D3), and
-redelivers an event across a POST failure once the API returns (D1). All pass. The
-original live failure (game relaunch dropping a session) is exactly the D3 case.
+**Updated 2026-08-10 — the harness moved into the repo.** Reliability logic was covered by a
+throwaway harness in `scratchpad/`, which meant the guarantee was only ever checked by someone
+remembering to run it. It is now **`shipper/ship.test.mjs`: 14 tests, `npm test --workspace
+shipper`, no database and no network.**
+
+⭐ **`post()` is not stubbed; `globalThis.fetch` is.** The real post-then-checkpoint path runs,
+including the 2xx check that decides whether the offset moves. Stubbing `post` would have tested
+the stub — and `post` is the function the guarantee lives in.
+
+Every claim in §2–3 has a test that fails when it is broken:
+
+| Claim | Test |
+| --- | --- |
+| **D1** — a failed POST loses nothing | The offset does not move, no checkpoint is written, **and the next poll re-sends the same events**. Both halves: "the offset stayed" is worthless if the retry never fires |
+| **D2** — a success advances and persists | Offset equals file size; the sidecar carries offset *and* fingerprint |
+| **D3** — a relaunch reships | ⭐ Verified with a new log that is **LARGER** than the old offset — the exact case `size < offset` cannot catch, and the reason the design fingerprints the first line |
+| Truncation | Same banner, fewer bytes — only the size check sees this one |
+| Partial line | A half-written trailing line is not consumed, **and is delivered once complete** |
+| Restart | `loadState` resumes from the checkpoint, not EOF |
+
+⚠️ **Mutation-checked, which is the only reason the above means anything.** Replacing the
+post-then-checkpoint block with an unconditional advance fails exactly the two D1 tests; reverting
+restores 14/14. A test that has never failed has never been shown to work.
+
+⚠️ **One assertion in the first draft was wrong, and the code was right.** It claimed the completed
+trailing line was malformed JSON — `{"seq":2,"incomplete":true}` is valid, so the shipper correctly
+shipped it. The test now asserts that delivery, which is the stronger check.
+
+Two small production changes made this possible, both no-ops in normal operation: `OMWA_LOG` /
+`OMWA_STATE_FILE` overrides so a test never touches the developer's real log or checkpoint, and an
+entrypoint guard so importing the module does not start polling and leave timers open.
 
 ---
 

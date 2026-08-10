@@ -606,3 +606,86 @@ design docs. Prod actually holds **47,747** — the corpus has been re-ingested 
 the copy sitting beside live-fetched numbers is derived-artefact drift in the presentation layer,
 and it would be stale again after the next ingest. It now says the same thing qualitatively.
 ▶ If a count is wanted, fetch it; do not write it down.
+
+---
+
+## 11. Client-side correctness (2026-08-10) — three fixes and the test layer that found them
+
+The dashboard had no automated tests. `TESTING.md` ranked the gap and this closes it, but the more
+useful outcome is *what looking produced*: adding the layer surfaced three defects that had been
+shipping.
+
+### 11.1 The lint that was red on `main`
+
+`npm run lint` had been failing, and all four errors were `react-hooks/set-state-in-effect`
+pointing at real problems rather than false positives. Worth stating plainly because a disabled or
+ignored linter is indistinguishable from a clean one until someone runs it.
+
+**Three were the same `useDarkMode` hook, byte-identical in three chart files** — `useState(false)`
+plus an effect calling `setDark(mq.matches)` on mount. That renders once with the wrong answer and
+immediately again with the right one: a visible flash of light-theme axes on a dark page.
+
+Replaced by one shared hook on **`useSyncExternalStore`**, which is the hook for precisely this —
+a value that lives *outside* React and changes on its own. React reads it during render, so the
+first paint is already correct and there is no state to keep in sync.
+
+> ⚠️ The **server snapshot** (third argument) is not optional here. These charts are imported by
+> Server Components; without it React throws during SSR because `window` does not exist. `false` is
+> the honest server answer — the server cannot know the client's colour scheme, so it renders light
+> and the client corrects on hydration.
+
+**Verified beyond "lint is green,"** because a palette permanently stuck on light would still pass
+that: drove `/mods/ccff` in both emulated colour schemes and compared the rendered SVG `fill`
+attributes. Ten chart surfaces in each, no page errors, and the palettes genuinely differ
+(`#0b0b0b` ink in light, `#ffffff` in dark).
+
+### 11.2 A `useEffect` in `EventFeed` that could never fire
+
+It reset four state variables when `firstPage` changed, to stop page 2 of *all mods* sitting under
+page 1 of *ccff only*. It was **dead code**: the call site already renders `<EventFeed
+key={query} …>`, so a filter change gives React a different key and it mounts a fresh component.
+The props of a mounted instance never change.
+
+It was also the *weaker* of the two copies — it reset four fields and forgot `loading`, so a filter
+changed mid-fetch would have left "Load more" disabled forever. **Remounting resets everything by
+construction, including the field a hand-written reset can forget.** Two copies of one rule is
+worse than one; deleting the effect removed the copy that could drift.
+
+### 11.3 `GateList` — a component extracted so a test could reach it
+
+The gate list's `key={gateKey(g)}` was inline in `app/gaps/page.tsx`. That page is an `async`
+Server Component and cannot be rendered in a test, and a test that re-implemented its `.map()`
+would assert on **its own copy of the code** rather than the code that ships. Extracting the list
+into `app/components/GateList.tsx` puts the real `key=` somewhere a test can render.
+
+This is the second half of the `check_id` grain bug (`12`): keying sixteen sibling gates on a
+shared `check_id` lets React's reconciler reuse the wrong element's state across a re-render.
+
+⚠️ **Why the E2E test cannot catch it, which is why the gap stood recorded for a week.** Wrong keys
+still render correct markup on a first paint, and React strips duplicate-key warnings from
+**production** builds — which is what Playwright drives (`next start`). Vitest runs React in
+development, so the warning exists to be caught. Mutation-verified: reverting to `key={g.check_id}`
+fails exactly that test and no other.
+
+### 11.4 What the component layer covers, and what it deliberately does not
+
+`EventFilters` and `SearchBox` hold no state of their own — they read filters from the URL and
+write new ones back, and the answer arrives as fresh props from the server. **Their entire
+observable behaviour is the URL they hand the router**, so asserting on that is asserting on the
+job, not on a mock. `useSearchParams` is replaced by a real `URLSearchParams`; only the framework
+boundary is stubbed.
+
+The load-bearing one: **a filter change drops the `cursor`** (§6). A cursor encodes a position
+within a specific ordering of a specific result set; carried across a filter change it points into
+a result set that no longer exists, so the page returns a wrong slice with no error, no empty state
+and entirely plausible rows.
+
+⚠️ **Recorded honestly:** two of the `SearchBox` tests are weaker than their names. An empty query
+is blocked *twice* — a submit guard and a disabled button — so removing either alone leaves them
+green. They pin the user-visible contract but cannot detect a single-layer regression; a third test
+submits the form directly, past the button, to isolate the guard. **Found by mutation, not by
+reading.**
+
+Server Components stay with Playwright. Mocking the fetch layer until RTL can render one produces a
+test that asserts your own mocks — a check that cannot fail. jsdom is used only where it detects
+something a real browser cannot.
