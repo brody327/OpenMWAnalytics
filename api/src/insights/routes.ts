@@ -7,7 +7,7 @@
 //   GET  /insights/review     authenticated   the pending queue
 //   POST /insights/:id/review authenticated   approve or reject
 //
-// "Human review" (résumé bullet 5) is only a real claim if unreviewed output cannot reach a
+// "Human review" is only a real claim if unreviewed output cannot reach a
 // reader. That is why the public route filters on `status = 'approved'` in SQL rather than taking
 // a `status` query parameter with a safe default: a default is a suggestion, and
 // `?status=pending` would make the review step decorative for anyone who reads the URL bar.
@@ -44,7 +44,7 @@ const publicColumns = {
  * A consumer that renders the insight and drops this string is making a claim we did not: that a
  * machine wrote it, and that it is a judgement about retrieved text rather than a measurement.
  * Putting it in the payload rather than only in the UI means a second consumer -- a script, a
- * different frontend, an interviewer poking the API -- cannot lose it by accident.
+ * different frontend, someone poking the API directly -- cannot lose it by accident.
  */
 const GENERATED_NOTE =
   'Model-generated from a fixed evidence payload and reviewed by a human before approval. ' +

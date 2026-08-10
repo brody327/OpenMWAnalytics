@@ -52,25 +52,19 @@ telemetry to the game's own data files.
 | **env scope + seeding** (`06`) | findings exclude seeded rows **in SQL**; 180,003 demo events behind a banner |
 | **Landing page** (`07 §10`) | leads with the finding, not with "AI" |
 
-### ⚠️ Résumé audit (2026-08-09) — 4 of 5 bullets fully true, one word is not
+### Deliberately not built: an area rollup
 
-| # | Claim | |
-| --- | --- | --- |
-| 1 | generic ingest API, Zod, idempotent upsert, JSONB, zero migrations | ✅ |
-| 2 | shipper at-least-once, authenticated, **rate-limited** | ✅ (rate limiting 08-09) |
-| 3 | GHCR→Actions→k3s→RDS/TLS, certs, **uptime/error monitoring** | ✅ |
-| 4 | scheduled rollups over session/**area**/skill-check, filterable dashboard | 🟡 **"area" is FALSE** |
-| 5 | constrained **AI-insights**, bounded prompts + human review | ✅ (4c, 08-09) |
+`AreaEntered` exists, but it is used for exactly one thing — classifying a friction next-action as
+`left_area`. There is no area rollup, no area endpoint and no area view, and that is a decision
+rather than a backlog item.
 
-**`AreaEntered` is used only to classify a friction next-action as `left_area`.** There is no area
-rollup, no area endpoint, no area view.
+The genuine area question is Module 2 (*exposure* — what did players never discover?), and it needs
+a content manifest the mod does not emit. It is the one module in `10` with nothing currently
+answerable. Counting `AreaEntered` by area without that manifest produces a chart with no question
+behind it, which `10 §6` forbids: **every view must cite the question it answers.**
 
-▶ **Recommendation: cut the word, do not build the feature.** The genuine area question is
-Module 2 (*exposure* — what did players never discover?), which needs a content manifest the mod
-does not emit, and is the one module with nothing answerable. Counting `AreaEntered` by area
-without it is a chart with no question behind it, and `10 §6` forbids exactly that. Building it to
-make a résumé word true is the "I added X because the JD said X" failure the plan itself warns is
-transparent in an interview.
+The cheap version was available and was declined. Shipping it would have added a page, and
+subtracted the only thing that makes the other pages trustworthy.
 
 ## Historical status (2026-07-20)
 

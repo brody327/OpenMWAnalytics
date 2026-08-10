@@ -59,8 +59,8 @@ was already deploy-shaped — the egress design paid off here.
 
 **Why k3s on one VM (not managed EKS, not Docker-Compose):** k3s is a single-binary,
 full-API Kubernetes. On one VM it gives *real* manifests / `kubectl` / orchestration
-concepts (the JD names Kubernetes) **and** real Linux admin (SSH, systemd, firewall) —
-maximum skill coverage, minimum sprawl. Managed EKS costs money and hides the Linux;
+concepts **and** real Linux admin (SSH, systemd, firewall) — the whole stack stays visible
+and debuggable. Managed EKS costs money and hides the Linux;
 Compose would skip Kubernetes entirely.
 
 ---
@@ -226,7 +226,7 @@ it works only because Cloudflare **flattens** it and answers with A records.
 
 **Degrading gracefully when the API is down.** The API lives on one EC2 box that gets stopped
 between sessions, so "upstream unreachable" is a *normal* state, and an error page is a poor
-answer for a URL on a résumé. The dashboard now falls back to a committed last-known-good
+answer for a public URL. The dashboard now falls back to a committed last-known-good
 snapshot with a plainly-worded notice and the capture date. Two details carry the design:
 
 - **The fetch is bounded** (`AbortSignal.timeout`). A *stopped* box drops packets rather than

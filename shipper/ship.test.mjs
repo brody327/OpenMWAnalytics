@@ -7,7 +7,7 @@ import path from 'node:path';
 // SHIPPER RELIABILITY — the most specific claim in the project, previously verified only by
 // having run it.
 //
-// `04_SHIPPER_DESIGN.md` and the résumé both say: at-least-once delivery via post-then-checkpoint,
+// `04_SHIPPER_DESIGN.md` states the guarantee: at-least-once delivery via post-then-checkpoint,
 // a durable offset, and relaunch detection by first-line fingerprint. Every one of those is a
 // statement about what happens when something goes WRONG — the API is down, the process restarts,
 // the game recreates the log — which is precisely the state you cannot confirm by watching it work

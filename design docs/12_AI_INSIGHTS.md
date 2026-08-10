@@ -111,8 +111,8 @@ wrongly still passes) specifically so the suite cannot be read as proving more t
 
 ## 4. Human review is a state transition, not a hope
 
-Résumé bullet 5 says *"bounded prompts + human review"*. That is only a true claim if unreviewed
-output **cannot reach a reader**.
+This system claims *bounded prompts + human review*. That is only a true claim if unreviewed
+output **cannot reach a reader** — a review step a query parameter can bypass is not a review step.
 
 | Route | Auth | Behaviour |
 | --- | --- | --- |

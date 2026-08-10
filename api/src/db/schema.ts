@@ -602,7 +602,7 @@ export const itemPlacements = pgTable(
 //
 // A generated insight is not a query result. Two things make it a stored artefact:
 //
-//  1. **Review is a state transition.** Résumé bullet 5's "human review" means an insight is
+//  1. **Review is a state transition.** The "human review" claim means an insight is
 //     `pending` until a person approves it, and only approved insights render publicly. That is a
 //     status column by definition -- generating on read would mean serving unreviewed model output
 //     as though it were reviewed, which is the whole thing the review step exists to prevent.

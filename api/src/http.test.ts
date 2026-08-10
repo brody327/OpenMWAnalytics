@@ -97,7 +97,7 @@ test('⭐ the write path FAILS CLOSED when the token is not configured', async (
 // ── idempotency ───────────────────────────────────────────────────────────────────────────────
 
 test('⭐⭐ posting the SAME event twice yields ONE row', async () => {
-  // Résumé-bearing claim, and until now nothing verified it. At-least-once delivery guarantees
+  // A load-bearing claim, and until now nothing verified it. At-least-once delivery guarantees
   // duplicates: the shipper posts, the response is lost, it posts again. If the upsert were not
   // idempotent every network blip would inflate every metric — silently, with plausible numbers.
   await cleanup();

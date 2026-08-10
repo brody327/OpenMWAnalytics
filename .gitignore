@@ -42,6 +42,15 @@ design docs/LEARNING_LOG.md
 .claude/skills/teach/
 PROJECT_DOSSIER.md
 
+# ⚠️ Résumés and CVs. These carry a home address, a phone number and an email, and two of them
+# were sitting untracked-but-UNIGNORED in the repo root on 2026-08-10 — one `git add -A` away
+# from a public repo, which is exactly how the secrets rule in CLAUDE.md says this goes wrong.
+# Patterns rather than filenames, so the next one is covered before it is noticed.
+*[Rr]esume*.pdf
+*[Rr]esume*.md
+*[Rr]esume*.docx
+*CV.pdf
+
 # Playwright
 dashboard/test-results/
 dashboard/playwright-report/

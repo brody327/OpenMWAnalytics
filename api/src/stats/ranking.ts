@@ -87,7 +87,7 @@ const round = (n: number, places = 4): number => {
  * Pure ranking heuristic -- no database, no I/O, unit-tested on a hand-computable fixture.
  * Splitting this out from the handler is the deliberate design choice (agreed 2026-07-24):
  * the scoring RULE is the portfolio-legible part, and a pure function is the thing worth
- * showing an interviewer and testing without a DB.
+ * demoing and testing without a DB.
  *
  * @param rows per-topic counts (from the index-only byTopic scan)
  * @param m    prior strength; defaults to PRIOR_STRENGTH
