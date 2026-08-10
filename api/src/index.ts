@@ -136,7 +136,23 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: 'internal' });
 });
 
-const port = Number(process.env.PORT ?? 4000);
-app.listen(port, () => {
-  console.log(`[api] listening on http://localhost:${port}`);
-});
+// ⭐ The app is EXPORTED and the listener is separate.
+//
+// Binding a port at import time makes the app untestable at the HTTP level: a test that imports
+// this file would start a real server on 4000, collide with a running dev instance, and leave a
+// handle open that keeps the test runner alive. Exporting `app` lets a test drive the full stack —
+// routing, middleware order, auth, rate limiting, validation, the error handler — against an
+// ephemeral port, which is the layer the 105 unit tests deliberately do not cover.
+//
+// `index.ts` stays the entrypoint; only the bind moved behind a guard.
+export { app };
+
+// `import.meta.main` is not available on this Node/TS combination, so the check is explicit:
+// listen only when this module is the process entrypoint, never when a test imports it.
+const isEntrypoint = process.argv[1]?.includes('index');
+if (isEntrypoint) {
+  const port = Number(process.env.PORT ?? 4000);
+  app.listen(port, () => {
+    console.log(`[api] listening on http://localhost:${port}`);
+  });
+}

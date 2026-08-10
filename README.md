@@ -121,6 +121,20 @@ which is the property `/health` lacks.
 
 ---
 
+## Testing
+
+Three layers, chosen for what each can actually detect — **117 API tests** (unit + HTTP-level
+against a real Postgres) and **11 Playwright E2E tests** asserting invariants against a running
+deployment. New guards are mutation-checked: broken deliberately to confirm they go red, then
+reverted to confirm they go green.
+
+```bash
+npm test --workspace api                    # 117, needs Postgres for the DB-backed subset
+npm run test:e2e --workspace dashboard      # 11, against a live stack
+```
+
+See [TESTING.md](./TESTING.md) — including what is deliberately *not* tested, and the ranked gaps.
+
 ## Repository layout
 
 npm-workspaces monorepo. The **only** part OpenMW loads is `mod/`.
