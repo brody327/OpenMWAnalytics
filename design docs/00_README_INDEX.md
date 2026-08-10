@@ -14,13 +14,13 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `03_EVENT_REGISTRY.md` | Catalog of canonical event `type`s and their `data` shapes (the "tracking plan") — now the **public contract** third parties emit against. | 🟢 **6 verified live**. 2026-07-28 a play session proved `SkillCheckDisplayed`, `ItemConsumed` and the `base_value`/`stat_modifier`/`stat_damage` chain — all three had NEVER fired. ⚠️ the emitting CCFF code is still UNCOMMITTED. `Spike*`/`Heartbeat` retired |
 | `04_SHIPPER_DESIGN.md` | The Node log-tailing shipper: offset tracking, truncation handling, batching, retries, at-least-once; operating it. | ✅ reliability pass done 2026-07-18 (durable offset, relaunch detection, at-least-once); §5 adds the first-run EOF trap + recovery. ⚠️ **SIX-DAY SILENT OUTAGE 2026-07-20→27** — logon-only trigger + exhausted retries; now self-healing (15-min repeat) **verified by killing it**, plus heartbeat + `/ops/freshness` with a **fired** alert |
 | `05_API_DESIGN.md` | Ingestion + query REST API (Node/TS): stack, endpoints, validation, versioning. | ✅ ingest built + tested; read side adds `GET /events` (keyset) + `GET /mods` 2026-07-23, and **`GET /search`** 2026-07-26 — the first endpoint calling an EXTERNAL service; + **`/ops/freshness` & `/ops/heartbeat`** 2026-07-27 (deliberately NOT `/health`, which k8s probes); + **`GET /stats/sufficiency`** 2026-07-28 — Q3.6, the only `/stats` route that leaves the telemetry DB, **`reachable` now answered from the world survey**; + 2026-08-09 **`GET /version`** (the check a stale pod cannot pass), **4 `/insights` routes** (12), **rate limiting** on every write and read path, and `?limit` on `/stats/sufficiency` (it was returning **1.86 MB** of all 6,687 gates per request) |
-| `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented; + corpus tables & pgvector 2026-07-26 (measured index costs, TOAST, source-scoped orphan sweep); + `shipper_state` 2026-07-27 (migration `0006`, one row per install) |
-| `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes; offline degradation. | 🟢 **live at `omwanalytics.com`**; + event explorer, nav, drill-down (2026-07-23) + **stuck-ranking view** `GET /stats/ranking` (§7, 2026-07-24) + **corpus search view** `/search` (§8, 2026-07-27) — **search verified live in prod**; the older "not yet deployed" note is stale for the nav at least (observed in live HTML) but the ranking view was **not** re-checked this session. + **`/gaps` content-sufficiency view 2026-08-09** (§9) — verdict, gaps with n beside them, `reachable` rendered as UNKNOWN rather than hidden, the merchant caveat rendered verbatim, and the approved insight badged as generated |
+| `06_DATA_MODEL.md` | Postgres schema, event storage strategy (JSONB vs columns), idempotent upsert, indexing. | ✅ implemented; + corpus tables & pgvector 2026-07-26 (measured index costs, TOAST, source-scoped orphan sweep); + `shipper_state` 2026-07-27 (migration `0006`); + **§env scope + committed seeder 2026-08-09** — findings exclude `env='synthetic'` in SQL (⚠️ NOT `env='prod'`, which would have blanked the dashboard), 180,003 seeded events, and the accepted decision that the friction rollup is permanently mixed |
+| `07_DASHBOARD.md` | Next.js dashboard + the Express query API it consumes; offline degradation. | 🟢 **live at `omwanalytics.com`**; + event explorer, nav, drill-down (2026-07-23) + **stuck-ranking view** `GET /stats/ranking` (§7, 2026-07-24) + **corpus search view** `/search` (§8, 2026-07-27) — **search verified live in prod**; the older "not yet deployed" note is stale for the nav at least (observed in live HTML) but the ranking view was **not** re-checked this session. + **`/gaps` content-sufficiency view 2026-08-09** (§9) — verdict, gaps with n beside them, `reachable` rendered as UNKNOWN rather than hidden, the merchant caveat rendered verbatim, and the approved insight badged as generated; + **§10 the landing page 2026-08-09** — leads with the finding, not with "AI" |
 | `08_INSTRUMENTATION.md` | How mechanics become events: sandbox isolation, auto- vs manual-instrumentation, the `OMWA_Track` seam, and the "mod vs platform" decision. | ⚠️ SDK is now a FACTORY (`require(...)(modId)`, breaking, 2026-07-23) — **not yet verified in-game**; auto path still open |
 | `09_DEPLOYMENT.md` | Hosting the cloud half: AWS EC2 + k3s + RDS + GHCR/Actions; Ingress/TLS; the local/cloud deploy boundary. | 🟢 **live**; + migrations via initContainer + CronJob rollups (2026-07-22); §8 adds the corpus deploy — **manual, tunnelled, un-CI-able** (2026-07-26) |
 | `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20; **Q2.5 unblocked + Q3.5/Q3.6 added 2026-07-27**; **Q3.6 mechanical half BUILT + DEPLOYED 2026-07-28** (`/stats/sufficiency`); §7 records the scope boundary (`/search` correctly has no row). **Q3.6 READ SIDE SHIPPED 2026-08-09** — `/gaps`, plus the generated layer (12) |
 | `11_SEARCH_AND_RETRIEVAL.md` | Phase 4b: hybrid (lexical + vector) search over the game corpus, and its joins to telemetry. Grain, embeddings, schema, ingest, `tsvector`, RRF fusion. | ✅ **4b COMPLETE 2026-07-27** — steps 1–8 built, merged, deployed; `/search` live and verified `mode:"hybrid"` in prod. §10a `ef_search` curve; **§10b: the stored 384 dims CANNOT demonstrate Matryoshka** (head≈mid≈tail). **§12: a test fixture was overwriting real records — `verify-corpus` added.** **§13: world placement survey designed (spiked).** **§14: ordered multi-plugin merge — base + Tribunal + Bloodmoon + CCFF, 45,542 records, local AND prod verified.** **§13: world placement survey BUILT, RUN + INGESTED 2026-07-28 — 6,797 placements, 957 areas, local AND prod**; corpus re-merged with `OAAB_Data.esm` (47,732 records, prod `verify-corpus` green). ▶ open: dims sweep, `m`/`ef_construction`, chunk-text verification |
-| `12_AI_INSIGHTS.md` | **Phase 4c**: bounded LLM insights over the aggregate layer — the one question SQL cannot answer, the mechanical guards that decide whether generated text may be published, and the review state machine. | 🟢 **BUILT 2026-08-09** — validator/provider/prompt/orchestration/4 routes/`insights` table/`/gaps` view, 97 tests. ⚠️ **NO LIVE MODEL CALL HAS EVER RUN** (`ANTHROPIC_API_KEY` unset). §6 records the gate-grain finding: `check_id` is NOT a key |
+| `12_AI_INSIGHTS.md` | **Phase 4c**: bounded LLM insights over the aggregate layer — the one question SQL cannot answer, the mechanical guards that decide whether generated text may be published, and the review state machine. | ✅ **LIVE 2026-08-09** — first insight generated against `claude-opus-5`, reviewed, approved and rendering publicly. §5 the two retrieval defects only running it found; §6 the gate grain (`check_id` is NOT a key); §7 the provider. ⚠️ the FIRST generation was honest and useless — one dev-marker passage in, `UNCLEAR` out, and the guards would not have caught a guess |
 | `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |
 
 ## Source-of-truth rules
@@ -33,7 +33,43 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 4. Record a decision where it belongs *first*, then reflect impacts elsewhere.
 5. Do not update a design doc until a decision is actually made.
 
-## Current status (2026-07-20)
+## Current status (2026-08-09) — PHASE 4 COMPLETE
+
+**Every phase of the plan is built, deployed and verified from outside.**
+[omwanalytics.com](https://omwanalytics.com) leads with a real finding; the loop runs
+game → `openmw.log` → shipper → API → Postgres → dashboard, with a second pipeline joining
+telemetry to the game's own data files.
+
+| Shipped 2026-08-09 | |
+| --- | --- |
+| **4c — AI insights** (`12`) | bounded prompt, structured outputs, mechanical validation, review workflow. First insight generated, reviewed, approved, public |
+| **CI auto-rollout** (`09 §10–11`) | tests → build → SSM/OIDC deploy → `GET /version` asserted through the ingress. No inbound port, no stored SSH key |
+| **`/gaps`** (`07 §9`) | Q3.6's read side — the endpoint had been live and invisible since 07-28 |
+| **Rate limiting** (`05`) | three tiers + `trust proxy 1`; `/health` deliberately exempt |
+| **env scope + seeding** (`06`) | findings exclude seeded rows **in SQL**; 180,003 demo events behind a banner |
+| **Landing page** (`07 §10`) | leads with the finding, not with "AI" |
+
+### ⚠️ Résumé audit (2026-08-09) — 4 of 5 bullets fully true, one word is not
+
+| # | Claim | |
+| --- | --- | --- |
+| 1 | generic ingest API, Zod, idempotent upsert, JSONB, zero migrations | ✅ |
+| 2 | shipper at-least-once, authenticated, **rate-limited** | ✅ (rate limiting 08-09) |
+| 3 | GHCR→Actions→k3s→RDS/TLS, certs, **uptime/error monitoring** | ✅ |
+| 4 | scheduled rollups over session/**area**/skill-check, filterable dashboard | 🟡 **"area" is FALSE** |
+| 5 | constrained **AI-insights**, bounded prompts + human review | ✅ (4c, 08-09) |
+
+**`AreaEntered` is used only to classify a friction next-action as `left_area`.** There is no area
+rollup, no area endpoint, no area view.
+
+▶ **Recommendation: cut the word, do not build the feature.** The genuine area question is
+Module 2 (*exposure* — what did players never discover?), which needs a content manifest the mod
+does not emit, and is the one module with nothing answerable. Counting `AreaEntered` by area
+without it is a chart with no question behind it, and `10 §6` forbids exactly that. Building it to
+make a résumé word true is the "I added X because the JD said X" failure the plan itself warns is
+transparent in an interview.
+
+## Historical status (2026-07-20)
 
 **The platform is deployed and public**, running real gameplay data:
 **[omwanalytics.com](https://omwanalytics.com)** (dashboard) over

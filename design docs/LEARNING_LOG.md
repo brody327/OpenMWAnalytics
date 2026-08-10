@@ -2287,3 +2287,49 @@ the filter into both candidate CTEs + `hnsw.iterative_scan = relaxed_order` (11 
    you get zero. Explain why over-fetching more would not reliably fix it."*
 
 The bank now holds **eleven** questions across three sessions. Still unasked.
+
+### 2026-08-09 (part 3) — env scope, seeding, landing page, and the résumé audit
+
+Closing work after 4c went live. Every item below was found by **measuring before acting** rather
+than after, which is the same lesson as the deploy chain arriving from the pleasant direction.
+
+| # | The obvious move | What measuring first showed |
+| --- | --- | --- |
+| 1 | filter `/stats/*` to `env='prod'` (doc 00's own open item, weeks old) | prod's 145 real events are **all `dev`** — it would have blanked the public dashboard. The real axis is **real vs fabricated**: `env <> 'synthetic'` |
+| 2 | add the env predicate to every `/stats` endpoint | `events_confrontation_cols_idx` has no `env`, so it would have **silently undone the index-only tuning** (~7×) |
+| 3 | run the existing seeder | **there was no seeder.** 1,000,000 local rows, nothing committed that produced them |
+| 4 | let `received_at` default | all 180k would claim to arrive at once; the hybrid read computes everything live for the lateness window. Seeding would have looked like it made the site slow. 12 sessions folded → **449** after the fix |
+| 5 | report the seeded table size | 600 MB — **bloat from deleting the previous million**, not size. True answer **75 MB** |
+| 6 | write "47,732 game records" on the landing page (the docs' figure) | prod holds **47,747**. Removed rather than corrected: a constant beside live-fetched numbers is derived-artefact drift in the copy layer |
+
+⭐ **The seeder generates SESSIONS, not rows** — `friction_rollup` classifies each failure by the
+*next* event in the session, so random rows would fold into a rollup that is fully populated and
+meaningless. Verified end to end: generator emits retry/abandon/leave at 62/26/12, the fold recovers
+**60/28/11** from the sequences alone.
+
+⚠️ **I introduced a provenance gap and caught it in verification, not design.** Seeding put 180k
+fabricated events on public pages with no label for about ten minutes. The banner that fixed it must
+NOT appear on `/gaps` — that view is real-only, so the same words there would be false in the other
+direction.
+
+⭐ **Shrinkage is finally observable on live data:** n=3 @ 67% fail ranks **#40**; n=7,828 @ 70%
+ranks **#5**. At 145 real events the ranking heuristic could not demonstrate itself at all. This is
+banked question #1's subject, now with a live example to point at.
+
+### ⚠️ RÉSUMÉ AUDIT — 4 of 5 bullets true; one WORD is not
+
+Bullets 1, 2, 3, 5 verified true (2 and 5 became true today). Bullet 4 claims rollups over
+"session/**area**/skill-check" — and `AreaEntered` is used *only* to classify a friction
+next-action as `left_area`. **No area rollup, endpoint, or view exists.**
+
+▶ **Recommended: cut the word, do not build the feature.** The genuine area question is Module 2
+(*exposure* — what did players never discover?), which needs a content manifest the mod does not
+emit. Counting `AreaEntered` by area without it is a chart with no question behind it, which
+`10 §6` forbids. Building it to make a résumé word true is the failure the plan itself calls
+"transparent in an interview".
+
+### ▶ BANK — nothing new; the debt is now the whole agenda
+
+**Eleven questions, three sessions, still unasked.** The build is finished: Phase 4 complete, four
+bullets true and the fifth diagnosed, the site populated, labelled and leading with a real finding.
+That was the condition attached to banking them.

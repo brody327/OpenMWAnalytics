@@ -219,15 +219,29 @@ on every row, and the pipeline must be testable with no network and no spend.
 
 ---
 
-## 8. Status
+## 8. Status — LIVE
 
 | | |
 | --- | --- |
-| ✅ Built | validator (+ mutation-checked tests), provider, prompt, orchestration, 4 routes, `insights` table (migrations 0008 + 0009), `/gaps` dashboard view |
-| ✅ Verified | evidence assembly against real data; 97 tests; rejected-insight-leaves-no-row; SSR 25 cards / 25 distinct grains |
-| ❌ **NOT verified** | **no live model call has ever run** — `ANTHROPIC_API_KEY` is not configured locally or in the cluster |
+| ✅ Built | validator (mutation-checked), provider, prompt, orchestration, 4 routes, `insights` table (migrations 0008 + 0009), `/gaps` view |
+| ✅ **Live** | first insight generated against `claude-opus-5`, validated, reviewed, **approved**, rendering at omwanalytics.com/gaps |
+| ✅ Verified | 105 tests; a rejected insight leaves no row; a synthetic gate returns `no_gate`; SSR 25 cards / 25 distinct grains |
 
-▶ **Next:** add `ANTHROPIC_API_KEY` to `api/.env` and to the k8s secret `omwa-api-secrets`, generate
-against a real gate, and review the first insight. Until then the generation path is code that
-compiles and has never executed end to end — which is exactly the kind of claim this project does
-not make.
+### ⭐ The first generation was honest and useless, and that is the result worth keeping
+
+Retrieval handed it ONE passage — an internal dev marker (`EMIL -- BLOODMOON GREETINGS ABOVE`) —
+and the model returned `UNCLEAR`, stated the evidence could not settle the question, and
+*recommended re-running retrieval*. It diagnosed its own inputs.
+
+⚠️ **Had it guessed instead, the guards would not have caught it.** A plausible verdict over thin
+evidence violates no rule in `validate.ts` — no fabricated number, no uncited record, no
+obtainability claim. **Human review caught it**, because the evidence is stored verbatim beside the
+claim and a reviewer could see the single junk passage. That is the hole §3 admits to, closing
+exactly as designed, on the first real run.
+
+The regenerated insight (after the §5 retrieval fix) returned `NOT_SIGNPOSTED` with a rationale
+that names each passage it dismissed and why — the actionable form of `remedy_exists`: the content
+is there, write one hint line.
+
+▶ **Open:** ~3 of 8 retrieved passages are still low-content dialogue topic markers. Better than
+one, not yet good.
