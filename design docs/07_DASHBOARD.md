@@ -242,6 +242,27 @@ as "so close, consider lowering the bar" rather than "wrong build". They live in
 real data, the honest move is **two bands, not three** — near-miss (tune it) vs. build-gap
 (don't) — rather than a middle band nobody can act on.
 
+### 5b-i. ⚠️ `byCheck` IS NOT GRAINED AT `check_id` (found 2026-08-10)
+
+Its grain is **(check_id, skill, stat_type)**. Measured against production: **205 rows over 21
+checks**, twelve of them for `ccff_j_mortar:force` alone — security/attribute, security/skill,
+personality/attribute, … each with its own attempts and margins, because one CCFF action tests
+several stats via the archetype routes.
+
+The margin chart claimed "one bar per check" while drawing one bar per *row*, so twelve bars shared
+one axis label. **No check could have caught it**: Recharts sets no React keys there, so unlike the
+`byStat` table defect found the same day there was no console warning, and a category axis is not
+meaningfully assertable from Playwright.
+
+The dashboard now collapses to one row per `check_id`, taking the **greatest (least negative)
+margin** — which is §5c's rule applied one level up, not a new judgement. `attempts` is **not**
+summed: the rows overlap, so a total would be fabricated; the figure shown belongs to the winning
+row and the tooltip names its stat.
+
+⭐ This is the **third** appearance of "`check_id` is not a key" (see `12 §6`, and the `GateList`
+React key). The first two were fixed at their call sites; `collapseToChecks` is the first time the
+rule was extracted into something a test can hold.
+
 ### 5c. ⚠️ Not all attempts are equal — `failureDistance` grain
 
 **Found in live data 2026-07-20.** The Jeanus lockbox's "trust to luck" action is *cheap and
@@ -689,3 +710,70 @@ reading.**
 Server Components stay with Playwright. Mocking the fetch layer until RTL can render one produces a
 test that asserts your own mocks — a check that cannot fail. jsdom is used only where it detects
 something a real browser cannot.
+
+---
+
+## 12. Visual refresh (2026-08-10) — what changed on this page, and what deliberately did not
+
+The palette, type, light/dark mechanism and flavour scope now live in **`13_UI_DESIGN_SYSTEM.md`**.
+This section records only what it meant for the *read-side* views described above.
+
+### ⭐ No page copy changed. That was the constraint, not the outcome.
+
+Every string in §9's gate card, §10's landing page and the seeded-data banner is a load-bearing
+claim, and eleven E2E assertions pin them: `UNKNOWN` renders rather than hiding, the merchant caveat
+is verbatim, the finding sits **above** the banner, `Generated · reviewed` accompanies every
+generated sentence, and `/gaps` never shows the banner while `/events` always does.
+
+All eleven pass unchanged against the refreshed build. That is the useful result: the suite was
+written as *invariants rather than snapshots*, so a full restyle of every screen it covers moved
+nothing it asserts. A snapshot suite would have gone red on all eleven and taught nothing.
+
+### What the refresh added to these views
+
+| view | addition | why it is not decoration |
+| --- | --- | --- |
+| `/events` | a one-line **payload preview** on each collapsed row | The explorer's stated job (§6) is confirming new instrumentation fires *with the payload you expect*. A row reading only `ConfrontationAttempted` does not answer that; you had to expand every row to find the one you meant. Truncated as a **string**, not clipped with CSS — `data` is arbitrary mod-supplied JSON, and a 40 KB blob would otherwise enter the DOM on every row |
+| `/gaps` | a three-tile summary strip | Each tile's note carries the number's **scope**. "With no remedy: 1" is counted over the 25 gates the endpoint returned, not the 6,687 that exist, and the tile says so — an unqualified count there is the same overclaim §9 was built to avoid |
+| Mod detail | skill bands **tinted** blue → amber → red | The tint is the ordinal encoding: increasing distance from passing is also increasing "no threshold change will fix this" |
+| `/search` | the degradation banner promoted from a pill to a real notice | `mode: 'lexical'` means the embedding call **failed** and half the search did not run. It was a small amber chip beside a timing figure |
+
+### ⚠️ Three things the design handoff asked for and this page does not do
+
+1. **A violet verdict badge** for gates with a pending insight. Violet means *a machine wrote this*.
+   A verdict is computed by SQL over the parsed game files; tinting it violet would say a model
+   decided it.
+2. **A "pending review" tile.** `GET /insights` serves `status='approved'` only, enforced in SQL
+   with no widening parameter — by design (§9). The page cannot count pending items, and rendering
+   `0` would publish a number nobody measured. A pending count needs a new endpoint and an
+   authenticated reviewer view; that is a feature, not a style.
+3. **Approve / Reject buttons** on gate cards. The dashboard is public and unauthenticated. Those
+   buttons would let any visitor approve generated text into the one view a mod author is meant to
+   act on.
+
+### ⭐ Two grain bugs the refresh exposed (neither caused by it)
+
+Both are "`check_id`-shaped": a key or label dropping a dimension the payload varies on.
+
+| where | grain | was | symptom |
+| --- | --- | --- | --- |
+| `byStat` table React key | (skill, **stat_type**, trigger) | (skill, trigger) | 6 duplicate-key console errors; 12 of 18 rows collided |
+| `MarginChart` axis label | (check_id, **skill**, **stat_type**) | check_id | 205 bars under 21 labels; **silent** |
+
+The first was **found by the author clicking around**, not by any check — see `13 §8` for why the
+console capture reported clean while it was live. The second was found by auditing every other
+composite key once the first surfaced, and had no observable symptom at all.
+
+Neither was introduced by the refresh; the `git diff` shows only `className` changing on the table
+row. See `5b-i` for the fix and the aggregation rule.
+
+### ⚠️ The regression this refresh could most easily have shipped
+
+`useDarkMode` read `prefers-color-scheme`. Once the toggle existed, that was the wrong source — and
+nothing would have thrown. The page themes correctly; the **three Recharts files**, its only
+consumers, keep painting whatever the OS asked for. A user who toggles to dark gets a dark page
+carrying light-theme charts.
+
+Caught by asking what a *failing* world would print, and then checking it: the axis colour is
+sampled before and after a toggle and asserted equal to the `--border` token as the page resolves
+it. A test that only asserted "the colours differ" would have passed on any re-render.

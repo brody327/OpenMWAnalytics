@@ -25,6 +25,7 @@ the cases where running the thing contradicted the design.
 | `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20; **Q2.5 unblocked + Q3.5/Q3.6 added 2026-07-27**; **Q3.6 mechanical half BUILT + DEPLOYED 2026-07-28** (`/stats/sufficiency`); §7 records the scope boundary (`/search` correctly has no row). **Q3.6 READ SIDE SHIPPED 2026-08-09** — `/gaps`, plus the generated layer (12) |
 | `11_SEARCH_AND_RETRIEVAL.md` | Phase 4b: hybrid (lexical + vector) search over the game corpus, and its joins to telemetry. Grain, embeddings, schema, ingest, `tsvector`, RRF fusion. | ✅ **4b COMPLETE 2026-07-27** — steps 1–8 built, merged, deployed; `/search` live and verified `mode:"hybrid"` in prod. §10a `ef_search` curve; **§10b: the stored 384 dims CANNOT demonstrate Matryoshka** (head≈mid≈tail). **§12: a test fixture was overwriting real records — `verify-corpus` added.** **§13: world placement survey designed (spiked).** **§14: ordered multi-plugin merge — base + Tribunal + Bloodmoon + CCFF, 45,542 records, local AND prod verified.** **§13: world placement survey BUILT, RUN + INGESTED 2026-07-28 — 6,797 placements, 957 areas, local AND prod**; corpus re-merged with `OAAB_Data.esm` (47,732 records, prod `verify-corpus` green). ▶ open: dims sweep, `m`/`ef_construction`, chunk-text verification |
 | `12_AI_INSIGHTS.md` | **Phase 4c**: bounded LLM insights over the aggregate layer — the one question SQL cannot answer, the mechanical guards that decide whether generated text may be published, and the review state machine. | ✅ **LIVE 2026-08-09** — first insight generated against `claude-opus-5`, reviewed, approved and rendering publicly. §5 the two retrieval defects only running it found; §6 the gate grain (`check_id` is NOT a key); §7 the provider. ⚠️ the FIRST generation was honest and useless — one dev-marker passage in, `UNCLEAR` out, and the guards would not have caught a guess |
+| `13_UI_DESIGN_SYSTEM.md` | The *visual* half of the dashboard: OKLCH palette, type scale, the real light/dark toggle and where the theme actually lives, and the Morrowind-flavour scope. Companion to `07`. | ✅ **built 2026-08-10** — adopted from an external design handoff, with **8 recorded departures** (§7) and **one token corrected by measurement** (§2: `textFaint` was the only value in the palette failing WCAG AA, and it is the token carrying every `n = …` and `Cited records:` line). §5 the `data-theme` mechanism + why the inline boot script is load-bearing rather than an optimisation; §8 what was verified — including two of my own checks that were wrong before they were right |
 
 ## Source-of-truth rules
 
@@ -36,7 +37,20 @@ the cases where running the thing contradicted the design.
 4. Record a decision where it belongs *first*, then reflect impacts elsewhere.
 5. Do not update a design doc until a decision is actually made.
 
-## Current status (2026-08-10) — PHASE 4 COMPLETE, AND NOW TESTED
+## Current status (2026-08-10) — PHASE 4 COMPLETE, TESTED, AND NOW REDESIGNED
+
+| Shipped 2026-08-10 (second session) | |
+| --- | --- |
+| **Visual refresh across all five screens** (`13`, new) | Two full OKLCH palettes, a **real** light/dark toggle (the site only ever had `prefers-color-scheme`), Spectral for page titles, and the crescent+lens mark as a masked inline SVG. No page copy changed — 11 E2E assertions pin those strings |
+| ⭐ **The theme lives in the DOM, not in React** (`13 §5`) | CSS, Recharts and a pre-hydration boot script all read `data-theme`; React subscribes rather than owns. The inline script is what beats first paint — without it a dark-mode user gets a white flash on every document load |
+| ⚠️ **`useDarkMode` had to be repointed** (`13 §5`) | It read `matchMedia`. Left alone it would have failed silently in the quietest possible way: page themes correctly, all three chart files keep painting the **OS's** theme. Verified by asserting the axis colour equals the `--border` token after a toggle |
+| ⭐ **One palette token was wrong, and it was measured** (`13 §2`) | A WCAG audit over the rendered pages found `textFaint` was the **only** token failing AA — and it is the token carrying every `n = …` sample-size and `Cited records:` line. The caveat was the hardest thing on the page to read |
+| **Three departures the handoff itself invited** (`13 §7`) | No violet verdict badges (violet means *a machine wrote this*), no "pending review" count (`/insights` is approved-only in SQL — a `0` would be invented), no manual search-mode toggle |
+| ⭐⭐ **TWO grain bugs the refresh exposed** (`07 §5b-i`, `§12`) | Both `check_id`-shaped, neither caused by the refresh. `byStat`'s React key dropped `stat_type` (12 of 18 rows collided → 6 console errors); `MarginChart` drew **205 bars under 21 labels** and was completely silent. The **third and fourth** appearances of "`check_id` is not a key" (`12 §6`) |
+| ⚠️ **I reported "zero console warnings" and it was false** (`13 §8`) | The capture navigated with `page.goto` — a cold load, where React HYDRATES. `warnOnInvalidKey` lives on the RECONCILE path a `<Link>` click runs. So the check verified a strictly weaker claim than the one reported, and the bug lived in the gap. Fixed, then **established by mutation**: 6 messages on the client-nav pass, 0 on cold load |
+| **Test suite 159 → 167** (`TESTING.md`) | `collapseToChecks` extracted from a render so the grain rule is testable at all — Recharts sets no keys, so dev-build console capture cannot see it, and a category axis is not assertable from Playwright |
+
+## Historical status (2026-08-10) — PHASE 4 COMPLETE, AND NOW TESTED
 
 **Every phase of the plan is built, deployed and verified from outside.**
 [omwanalytics.com](https://omwanalytics.com) leads with a real finding; the loop runs

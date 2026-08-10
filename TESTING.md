@@ -21,7 +21,7 @@ absent.
 | **Component** | The `'use client'` slice: URL⇄form state, and the React-key check | nothing | `npm test --workspace dashboard` |
 | **E2E** | Rendered pages against a running deployment | a live stack | `npm run test:e2e --workspace dashboard` |
 
-**117 API · 14 shipper · 17 component · 11 E2E — 159 tests.** `npm test` at the root runs the
+**117 API · 14 shipper · 25 component · 11 E2E — 167 tests.** `npm test` at the root runs the
 first four; E2E is separate because it needs something deployed.
 
 ### 1. Unit — the judgement, extracted on purpose
@@ -99,7 +99,7 @@ the module does not begin polling and leave timers open.
 `npm test --workspace dashboard` (Vitest + jsdom + React Testing Library).
 
 Most of this app is `async` Server Components, and jsdom has nothing useful to say about those —
-see the Playwright note below. Three files earn a component test:
+see the Playwright note below. Four files earn a component test:
 
 **`EventFilters`** holds no filter state. It reads filters from the URL and writes new ones back,
 and the answer arrives as fresh props from the server. So its entire observable behaviour is *the
@@ -133,6 +133,22 @@ puts the real `key={gateKey(g)}` somewhere a test can reach it.
 Why it needs this layer at all: React only emits the duplicate-key warning in a **development**
 build. Playwright drives `next start`, a production build, which strips it — so this check is
 unavailable at the E2E layer by construction. It was a documented gap until Vitest existed here.
+
+**`SkillCharts.collapseToChecks`** — added 2026-08-10, for the same reason `GateList` was: the
+rule was buried in a render, so nothing could hold it.
+
+`/stats/skills` `byCheck` is grained **(check_id, skill, stat_type)** — 205 rows over 21 checks —
+while the margin chart claimed one bar per check. Twelve rows drew twelve bars under one axis
+label.
+
+⭐ **This one is the argument for the layer, because every other layer is blind to it.** Recharts
+sets no React keys, so there is no console warning even in dev — the `GateList` trick above does
+not apply. A category axis is not meaningfully assertable from Playwright. The only observation a
+broken world cannot produce is *the shape of the collapsed array*, which requires the collapse to
+be a function rather than a chain inside JSX.
+
+Eight tests, each mutation-checked: reversing the margin comparison, summing `attempts` across
+variants, and dropping the null-margin guard each turn a different subset red.
 
 ### 5. E2E — rendered pages, real stack
 
