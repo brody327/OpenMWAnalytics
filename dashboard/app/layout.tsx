@@ -82,10 +82,26 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      // Seeded to 'light' so the server output is valid on its own (a document with no theme
-      // attribute would resolve every token to nothing). The boot script overwrites it before
-      // paint; see suppressHydrationWarning above.
-      data-theme="light"
+      // ⚠️⚠️ DO NOT ADD `data-theme` HERE. IT WAS HERE, AND IT BROKE PRODUCTION ONLY.
+      //
+      // It was seeded to "light" so the server output looked self-contained. The consequence:
+      // rendering the attribute as a PROP makes React the owner of it, and React is then entitled
+      // to reassert its value on ANY root re-render — silently undoing the boot script.
+      //
+      // `suppressHydrationWarning` does NOT prevent this. It suppresses the *warning* about the
+      // mismatch, not the *reconciliation* that follows it. That distinction is the whole bug.
+      //
+      // MEASURED on the live site (a stack-trace trap on `setAttribute`, because guessing is what
+      // produced the previous two bad checks): two writes to `data-theme` on `/events` — "dark"
+      // from the boot script, then "light" from the minified React chunk. Only `/events`, only on
+      // Vercel; `next dev` and a local `next start` both showed ONE write and stayed dark. A local
+      // check could not have found this, which is why it was found by re-running the theme audit
+      // against production after deploying.
+      //
+      // With the attribute absent from the JSX, React never manages it and the boot script's value
+      // stands. The server HTML then carries no `data-theme`, which is safe by construction:
+      // globals.css puts the light tokens on `:root` unconditionally and gates dark behind
+      // `[data-theme="dark"]`, so "no attribute" already renders as light.
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} ${spectral.variable} h-full antialiased`}
     >
