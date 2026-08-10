@@ -20,6 +20,64 @@ import { test, expect } from '@playwright/test';
 
 const PAGES = ['/', '/gaps', '/events', '/search?q=guards', '/mods/ccff'];
 
+// ── The ROOT CAUSE test, added after the theme test caught only the symptom ───────────────────
+//
+// ⭐ The theme revert on /events was not a theme bug. It was a HYDRATION FAILURE: a timestamp
+// formatted with no locale and no time zone inside a Client Component, so Vercel (UTC) and the
+// browser (the visitor's zone) produced different text. React responds by discarding the server
+// HTML and re-rendering the document from scratch — REPLACING the <html> element, and taking the
+// boot script's `data-theme` with it.
+//
+// Testing only the theme would leave the next hydration mismatch free to break something else,
+// silently. This asserts the cause directly.
+//
+// ⚠️ IT CANNOT BE RUN LOCALLY AND MEAN ANYTHING. `next dev` and `next start` render both passes
+// on one machine, in one zone, with one locale, so the strings always match. Only a deployment
+// where the server and the browser genuinely differ can produce the failure — which is precisely
+// what this suite targets by default.
+test.describe('hydration', () => {
+  for (const path of PAGES) {
+    test(`⭐ hydrates cleanly, in a NON-UTC zone and a non-English locale — ${path}`, async ({
+      browser,
+    }) => {
+      // Deliberately hostile to the bug: a zone far from UTC and a locale whose number formatting
+      // differs (1.234,5 rather than 1,234.5). A test running as en-US/UTC would agree with the
+      // server by accident and pass while broken — the definition of a check that cannot fail.
+      const ctx = await browser.newContext({
+        timezoneId: 'Asia/Kolkata', // +05:30 — a half-hour offset, so even the date can differ
+        locale: 'de-DE',
+      });
+      const page = await ctx.newPage();
+
+      const errors: string[] = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      page.on('console', (m) => {
+        if (m.type() === 'error') errors.push(m.text());
+      });
+
+      await page.goto(path, { waitUntil: 'networkidle' });
+      await page.waitForTimeout(2000);
+
+      // React minifies these in production. #418/#423/#425 are the hydration family; the text is
+      // matched too so a future non-minified build is still caught.
+      const hydration = errors.filter((e) =>
+        /Minified React error #(418|419|420|421|422|423|425)|[Hh]ydration failed|did not match/.test(
+          e,
+        ),
+      );
+
+      expect(
+        hydration,
+        `hydration error on ${path}. This replaces <html> and silently drops data-theme. ` +
+          `Look for a Client Component formatting a date or number without an explicit ` +
+          `locale AND timeZone.\n${hydration.join('\n')}`,
+      ).toEqual([]);
+
+      await ctx.close();
+    });
+  }
+});
+
 /**
  * Read `data-theme` repeatedly over ~4s.
  *
@@ -66,10 +124,16 @@ test.describe('theme', () => {
     expect(after, 'clicking the toggle must change the theme').not.toBe(before);
     expect(await page.evaluate(() => localStorage.getItem('omwa-theme'))).toBe(after);
 
-    // ⭐ Asserted at `commit` — the first paint — not after load. A page that flashes the wrong
-    // theme and corrects itself still passes an after-load assertion, so that check could not
-    // detect the failure the boot script exists to prevent.
-    await page.reload({ waitUntil: 'commit' });
+    // ⭐ Asserted at `domcontentloaded`, NOT after full load. A page that flashes the wrong theme
+    // and corrects itself during hydration still passes an after-load assertion, so that check
+    // could not detect the failure the boot script exists to prevent.
+    //
+    // ⚠️ NOT `commit`, which was tried first and is too early: it fires when the navigation is
+    // committed, before inline <head> scripts have necessarily run. That was fine only while the
+    // server HTML still seeded `data-theme` — i.e. the assertion was passing because of the very
+    // bug being fixed. `domcontentloaded` is the earliest moment the boot script is guaranteed to
+    // have executed, and it is still long before hydration.
+    await page.reload({ waitUntil: 'domcontentloaded' });
     expect(
       await page.evaluate(() => document.documentElement.getAttribute('data-theme')),
       'the preference must be applied at first paint, not after hydration',

@@ -102,7 +102,9 @@ export function EventFilters({ mods }: { mods: ModRow[] }) {
             <option value="">All mods</option>
             {mods.map((m) => (
               <option key={m.mod_id} value={m.mod_id}>
-                {m.display_name ?? m.mod_id} ({m.events.toLocaleString()})
+                {/* 'en-US' pinned: Client Component, so this renders on the server and again on
+                    hydration, and a bare toLocaleString() would use a different locale each time. */}
+                {m.display_name ?? m.mod_id} ({m.events.toLocaleString('en-US')})
               </option>
             ))}
           </select>

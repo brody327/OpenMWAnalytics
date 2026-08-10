@@ -17,10 +17,41 @@ import type { EventPage, EventRow } from '../lib/events';
 // this component has nothing outside React to synchronise with -- so it has NO effects at all.
 // The one it used to have is dissected below, because why it was unnecessary is the useful part.
 
+// ⚠️⚠️ EXPLICIT LOCALE AND EXPLICIT TIME ZONE. BOTH ARE LOAD-BEARING. DO NOT REMOVE EITHER.
+//
+// This was `toLocaleString(undefined, …)` — no locale, no zone — inside a CLIENT Component, which
+// means it renders once on the server and again during hydration. Those two runs happen on
+// different machines: Vercel is UTC and `undefined` picks up the server's locale; the browser uses
+// the visitor's. The two strings disagree, so hydration fails.
+//
+// ⭐ WHAT THAT ACTUALLY COST, because "a timestamp renders slightly differently" sounds harmless:
+// a failed hydration makes React discard the server HTML and re-render the whole document from
+// scratch — REPLACING the <html> element. That took the `data-theme` attribute the pre-paint boot
+// script had just set with it, so a dark-mode user's preference silently reverted on /events and
+// only on /events. The theme bug was a SYMPTOM; this line was the cause.
+//
+// It is invisible locally by construction: `next dev` and `next start` run the server render on
+// the same machine, in the same zone, with the same locale, so the strings match. It can only
+// appear in a real deployment.
+//
+// ⭐ WHY UTC RATHER THAN THE VISITOR'S ZONE. The server genuinely cannot know the visitor's zone,
+// so the only two deterministic options are "always UTC" or "render nothing until after mount".
+// UTC wins on merit here rather than by default: this feed exists to confirm instrumentation
+// fired, which means correlating a row against `openmw.log` and against Postgres — and both of
+// those are UTC. A local-time column would silently require mental arithmetic at exactly the
+// moment someone is chasing a discrepancy. The label says UTC so nobody has to guess.
+const TIME_FMT = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+  timeZone: 'UTC',
+});
+
 function fmtTime(epochMs: string): string {
-  return new Date(Number(epochMs)).toLocaleString(undefined, {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
+  return TIME_FMT.format(new Date(Number(epochMs)));
 }
 
 // A one-line preview of the payload, so a collapsed row still says something specific (design
@@ -129,7 +160,9 @@ export function EventFeed({
                 aria-expanded={isOpen}
               >
                 <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <span className="font-mono text-[11px] text-text-faint">{fmtTime(e.ts)}</span>
+                  <span className="font-mono text-[11px] text-text-faint" title="UTC">
+                    {fmtTime(e.ts)} UTC
+                  </span>
                   <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[11px] text-text-muted">
                     {e.mod_id}
                   </span>
@@ -169,7 +202,13 @@ export function EventFeed({
           // page -- which would be wrong whenever a page lands exactly on the boundary.
           <span className="text-[13px] text-text-faint">End of feed.</span>
         )}
-        <span className="text-[13px] text-text-muted">{rows.length.toLocaleString()} loaded</span>
+        {/* 'en-US' pinned for the same reason as the timestamp above: this is a Client Component,
+            so the number is formatted once on the server and again on hydration. A bare
+            `toLocaleString()` uses the SERVER's locale then the VISITOR's — `1,234` vs `1.234`
+            for a German browser — which is the same hydration mismatch in a quieter costume. */}
+        <span className="text-[13px] text-text-muted">
+          {rows.length.toLocaleString('en-US')} loaded
+        </span>
         {error && <span className="text-[13px] text-red">{error}</span>}
       </div>
     </div>
