@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 24" width="26" height="24">
+  <mask id="crescent-cut">
+    <rect x="0" y="0" width="26" height="24" fill="white"></rect>
+    <circle cx="13" cy="10" r="8" fill="black"></circle>
+  </mask>
+  <circle cx="8" cy="10" r="8" fill="var(--icon-color, #b08d57)" mask="url(#crescent-cut)"></circle>
+  <circle cx="13.5" cy="10.5" r="4.5" fill="none" stroke="var(--icon-color, #b08d57)" stroke-width="2"></circle>
+  <line x1="16.8" y1="13.8" x2="20.5" y2="17.5" stroke="var(--icon-color, #b08d57)" stroke-width="2" stroke-linecap="round"></line>
+</svg>

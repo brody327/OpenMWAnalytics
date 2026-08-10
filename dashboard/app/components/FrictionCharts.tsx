@@ -28,6 +28,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { useChartChrome } from '../lib/chartChrome';
 import { useDarkMode } from '../lib/useDarkMode';
 import type { AfterFailureStat } from '../lib/stats';
 
@@ -57,13 +58,9 @@ const RAMP_DARK = ['#b7d3f6', '#86b6ef', '#5598e7', '#2a78d6', '#184f95'];
 // failure looks exactly like "this never happens".
 const OTHER_KEY = 'other';
 const OTHER_LABEL = 'Other / unclassified';
-const OTHER_FILL = { light: '#898781', dark: '#898781' };
-
-function chrome(dark: boolean) {
-  return dark
-    ? { ink: '#ffffff', muted: '#898781', grid: '#2c2c2a', surface: '#1a1a19' }
-    : { ink: '#0b0b0b', muted: '#898781', grid: '#e1e0d9', surface: '#fcfcfb' };
-}
+// Deliberately OFF the ordinal ramp and off the semantic palette — it is the bucket with no
+// position on the severity scale, and a neutral grey is the only honest place for it.
+const OTHER_FILL = '#898781';
 
 const titleCase = (s: string) =>
   s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -91,13 +88,17 @@ function toRows(data: AfterFailureStat[]): Row[] {
 }
 
 export function AfterFailureChart({ data }: { data: AfterFailureStat[] }) {
+  const c = useChartChrome();
+  // ⚠️ The ordinal RAMP still branches on the theme by hand, and does not come from the token
+  // palette. That is correct: these five steps were validated as a ramp — monotone lightness,
+  // ΔL gaps ≥ 0.06, light end clearing the surface — and the semantic tokens are three unrelated
+  // values per hue, not a scale. Pulling the ramp from `--blue*` would silently discard that.
   const dark = useDarkMode();
-  const c = chrome(dark);
   const ramp = dark ? RAMP_DARK : RAMP_LIGHT;
   const rows = toRows(data);
   if (!rows.length) {
     return (
-      <div className="flex h-32 items-center justify-center text-sm text-zinc-500 dark:text-zinc-400">
+      <div className="flex h-32 items-center justify-center text-[13px] text-text-faint">
         No failed attempts recorded yet.
       </div>
     );
@@ -130,7 +131,20 @@ export function AfterFailureChart({ data }: { data: AfterFailureStat[] }) {
             color: c.ink,
           }}
         />
-        <Legend wrapperStyle={{ fontSize: 12, color: c.muted, paddingTop: 8 }} />
+        {/*
+          ⚠️ `formatter` IS LOAD-BEARING HERE, NOT COSMETIC. Recharts paints each legend LABEL in
+          its series' colour by default, and `wrapperStyle.color` does not override it — the
+          colour is set per item. That put "Retried the topic" on screen as 12px text in the
+          ramp's lightest blue: measured 2.05:1 against the card, the worst contrast anywhere in
+          the app.
+
+          The swatch already encodes the series. The label is text, so it renders as ink and the
+          colour stays where colour belongs.
+        */}
+        <Legend
+          wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+          formatter={(value) => <span style={{ color: c.muted }}>{value}</span>}
+        />
         {ACTIONS.map((a, i) => (
           <Bar
             key={a.key}
@@ -151,7 +165,7 @@ export function AfterFailureChart({ data }: { data: AfterFailureStat[] }) {
           dataKey={OTHER_KEY}
           name={OTHER_LABEL}
           stackId="a"
-          fill={dark ? OTHER_FILL.dark : OTHER_FILL.light}
+          fill={OTHER_FILL}
           barSize={26}
           isAnimationActive={false}
           stroke={c.surface}

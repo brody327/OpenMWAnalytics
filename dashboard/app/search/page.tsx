@@ -21,12 +21,12 @@ function one(v: string | string[] | undefined): string {
 
 function ResultsSkeleton() {
   return (
-    <ul className="space-y-3" aria-hidden>
+    <ul className="space-y-2.5" aria-hidden>
       {[0, 1, 2, 3, 4].map((i) => (
-        <li key={i} className="animate-pulse rounded-md border border-zinc-200 px-4 py-3 dark:border-zinc-800">
-          <div className="h-4 w-1/3 rounded bg-zinc-200 dark:bg-zinc-800" />
-          <div className="mt-2 h-3 w-full rounded bg-zinc-100 dark:bg-zinc-900" />
-          <div className="mt-1.5 h-3 w-4/5 rounded bg-zinc-100 dark:bg-zinc-900" />
+        <li key={i} className="animate-pulse rounded-lg border border-border bg-surface px-4 py-3.5">
+          <div className="h-4 w-1/3 rounded bg-surface-raised" />
+          <div className="mt-2.5 h-3 w-full rounded bg-surface-raised" />
+          <div className="mt-1.5 h-3 w-4/5 rounded bg-surface-raised" />
         </li>
       ))}
     </ul>
@@ -38,13 +38,13 @@ export default async function SearchPage({ searchParams }: PageProps) {
   const q = one(params.q);
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-6 py-12">
+    <main className="mx-auto w-full max-w-[760px] px-7 pt-10 pb-20">
       <header className="mb-6">
-        <p className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs font-semibold uppercase tracking-[1.2px] text-text-faint">
           OpenMW Analytics
         </p>
-        <h1 className="mt-1 text-2xl font-semibold">Corpus search</h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+        <h1 className="mt-2 font-display text-[26px] font-semibold text-text">Corpus search</h1>
+        <p className="mt-2.5 max-w-[640px] text-sm leading-relaxed text-text-muted">
           Hybrid search over 36,567 chunks of Morrowind game data — dialogue, quests, items,
           spells, NPCs and cells. Word matching and meaning matching run separately and their
           rankings are fused, so a result can be found by either.
@@ -53,15 +53,15 @@ export default async function SearchPage({ searchParams }: PageProps) {
 
       {/* useSearchParams() suspends, so a Client Component that calls it needs a boundary.
           The fallback mirrors the real control's size to avoid a layout shift on hydration. */}
-      <Suspense fallback={<div className="h-[38px] rounded-md bg-zinc-100 dark:bg-zinc-900" />}>
+      <Suspense fallback={<div className="h-[42px] rounded-lg bg-surface-raised" />}>
         <SearchBox />
       </Suspense>
 
       <section className="mt-8">
         {q === '' ? (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Try <span className="font-medium">guards demanding bribes</span> — the words never
-            appear together in the corpus, so the meaning half has to earn it.
+          <p className="text-[13px] text-text-muted">
+            Try <span className="font-medium text-text">guards demanding bribes</span> — the words
+            never appear together in the corpus, so the meaning half has to earn it.
           </p>
         ) : (
           // ⚠️ key={q} is LOAD-BEARING. Without it, navigating ?q=a → ?q=b leaves React looking

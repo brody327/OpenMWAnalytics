@@ -8,15 +8,26 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { MarkIcon } from './MarkIcon';
+import { ThemeToggle } from './ThemeToggle';
 
-// The site nav. Small on purpose -- it exists because /events was unreachable except by typing
-// the URL, which made two working pages feel like two unrelated apps.
+// The top bar (design docs 13 §6). Sticky, persists across every screen.
+//
+// It exists because /events was unreachable except by typing the URL, which made two working
+// pages feel like two unrelated apps. The refresh gives it the wordmark and the theme control,
+// so it is now the one piece of chrome that is genuinely global.
 
 // Plain data, defined outside the component. Anything that does not depend on props or state
 // belongs out here: the component function re-runs on every render, so a value defined INSIDE
 // would be rebuilt each time for no reason.
+//
+// ⚠️ FOUR TABS, NOT THE HANDOFF'S FIVE. The design reference lists "Mod Detail" as a nav
+// destination; it is not one. /mods/[modId] is a DYNAMIC segment with no canonical instance —
+// a tab pointing at it would have to hardcode a mod id, and would then be wrong for every other
+// mod and broken the day that one stops reporting. It is reached by picking a mod from the
+// overview, which is what the prototype's static screen was standing in for.
 const LINKS = [
-  { href: '/', label: 'Mods' },
+  { href: '/', label: 'Overview' },
   { href: '/events', label: 'Events' },
   { href: '/gaps', label: 'Content gaps' },
   { href: '/search', label: 'Search' },
@@ -29,14 +40,36 @@ export function NavBar() {
   const pathname = usePathname();
 
   return (
-    <header className="border-b border-zinc-200 dark:border-zinc-800">
-      <nav className="mx-auto flex w-full max-w-5xl items-center gap-6 px-6 py-3">
-        {/* {expression} drops out of markup into JavaScript. Here it is just a string. */}
-        <Link href="/" className="text-sm font-semibold">
-          OpenMW Analytics
+    // `sticky` rather than `fixed`: sticky keeps the header in normal flow, so the content below
+    // is not overlapped and needs no compensating top padding — a padding value that would have
+    // to be kept in sync with this element's height by hand, forever.
+    <header className="sticky top-0 z-50 border-b border-border bg-surface">
+      {/* Full-bleed, not centred in a container: the bar is chrome, and chrome that stops short
+          of the window edge reads as a floating card. The CONTENT below is what gets a measure. */}
+      <nav className="flex w-full items-center gap-6 px-7 py-3.5">
+        {/* ── Wordmark ─────────────────────────────────────────────────────────────────── */}
+        <Link href="/" className="flex shrink-0 items-center gap-2.5">
+          {/* The mark takes `currentColor`, so bronze is applied here rather than inside the
+              icon — one asset, and the caller decides. */}
+          <MarkIcon className="text-bronze" />
+          <span className="flex flex-col leading-none">
+            <span className="font-display text-[17px] font-semibold tracking-[0.2px]">
+              OpenMW Analytics
+            </span>
+            {/* The subtitle says what this IS. A visitor landing on a public URL has no other way
+                to know they are looking at an internal developer tool rather than a product. */}
+            <span className="mt-1 font-mono text-[10px] uppercase tracking-[1px] text-text-faint">
+              Internal telemetry &amp; insight tool
+            </span>
+          </span>
         </Link>
 
-        <ul className="flex items-center gap-4">
+        {/* ── Tabs ─────────────────────────────────────────────────────────────────────────
+            `flex-1` + `justify-center` centres this group in the space LEFT OVER by the wordmark
+            and the toggle — the two fixed-width neighbours push against it equally. Using
+            `mx-auto` instead would centre it against the wider of the two, so the tabs would
+            drift right as the wordmark grows. */}
+        <ul className="flex flex-1 flex-wrap items-center justify-center gap-1">
           {/* No *ngFor. `.map()` turns an array of data into an array of elements, and React
               renders arrays directly. The parentheses after => mean "return this JSX"
               (an arrow function returning an object literal would need them anyway). */}
@@ -55,10 +88,10 @@ export function NavBar() {
                   href={link.href}
                   // A template literal builds the class string. This is where JSX feels verbose
                   // compared to [ngClass], and it is the honest trade: no directive, just JS.
-                  className={`text-sm transition-colors ${
+                  className={`block rounded-md px-4 py-2 text-[13px] font-medium transition-colors ${
                     isActive
-                      ? 'font-medium text-zinc-900 dark:text-zinc-100'
-                      : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200'
+                      ? 'bg-surface-raised text-text'
+                      : 'text-text-muted hover:bg-surface-raised/60 hover:text-text'
                   }`}
                   // Tells assistive tech which item is current. `undefined` REMOVES the attribute
                   // -- in JSX a falsy value like undefined/null/false omits it entirely, rather
@@ -71,6 +104,8 @@ export function NavBar() {
             );
           })}
         </ul>
+
+        <ThemeToggle />
       </nav>
     </header>
   );

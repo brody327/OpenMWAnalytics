@@ -44,9 +44,9 @@ export default async function ModPage({
   //  - fetch succeeded but the id is not in the registry: THAT is a real 404.
   if (error) {
     return (
-      <main className="mx-auto w-full max-w-4xl px-6 py-12">
-      <SyntheticBanner />
-        <p className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+      <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
+        <SyntheticBanner />
+        <p className="rounded-lg border border-amber-border bg-amber-bg p-4 text-[13px] text-amber">
           Could not reach the analytics API: {error}. Try again once it is back.
         </p>
       </main>
@@ -66,26 +66,27 @@ export default async function ModPage({
   const Dashboard = MOD_DASHBOARDS[mod.mod_id];
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-6 py-12">
+    <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
       <header className="mb-8">
+        {/* A breadcrumb, not a back button: it names WHERE it goes, so it works when the page was
+            reached from a link, a bookmark, or a shared URL — cases where "back" has no meaning
+            or goes somewhere else entirely. */}
         <Link
           href="/"
-          className="text-sm text-zinc-500 underline decoration-dotted underline-offset-4 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+          className="text-xs text-text-faint underline decoration-dotted underline-offset-4 transition-colors hover:text-text"
         >
           ← Overview
         </Link>
-        <p className="mt-4 text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Mod
-        </p>
+        <p className="mt-4 text-xs font-semibold uppercase tracking-[1.2px] text-text-faint">Mod</p>
         {/* display_name is nullable (a mod that has only ever been auto-registered from
             traffic has no friendly name yet), so fall back to the id. */}
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+        <h1 className="mt-2 font-display text-[26px] font-semibold text-text">
           {mod.display_name ?? mod.mod_id}
         </h1>
-        <p className="mt-2 font-mono text-sm text-zinc-500 dark:text-zinc-400">{mod.mod_id}</p>
+        <p className="mt-1.5 font-mono text-[13px] text-text-faint">{mod.mod_id}</p>
       </header>
 
-      <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="Events" value={mod.events.toLocaleString()} />
         <StatTile label="Sessions" value={mod.sessions.toLocaleString()} />
         <StatTile label="First seen" value={fmtDate(mod.first_seen_at)} />
@@ -96,7 +97,7 @@ export default async function ModPage({
           events" is just a pre-filtered link into the explorer, no wiring. */}
       <Link
         href={`/events?mod_id=${encodeURIComponent(mod.mod_id)}`}
-        className="inline-block rounded-lg border border-black/10 bg-white px-4 py-2 text-sm font-medium hover:bg-black/[0.03] dark:border-white/10 dark:bg-zinc-900/40 dark:hover:bg-white/[0.05]"
+        className="inline-block rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-medium text-text transition-colors hover:bg-surface-raised"
       >
         Browse {mod.mod_id} events →
       </Link>
@@ -114,9 +115,9 @@ export default async function ModPage({
 
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-black/10 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/40">
-      <div className="text-sm text-zinc-500 dark:text-zinc-400">{label}</div>
-      <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
+    <div className="rounded-[10px] border border-border bg-surface p-4">
+      <div className="text-xs text-text-faint">{label}</div>
+      <div className="mt-1 text-[19px] font-semibold tabular-nums text-text">{value}</div>
     </div>
   );
 }

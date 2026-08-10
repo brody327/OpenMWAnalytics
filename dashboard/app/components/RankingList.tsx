@@ -37,7 +37,7 @@ export function RankingList({
 }) {
   if (data.length === 0) {
     return (
-      <div className="flex h-24 items-center justify-center text-sm text-zinc-500 dark:text-zinc-400">
+      <div className="flex h-24 items-center justify-center text-[13px] text-text-faint">
         No confrontation attempts recorded yet.
       </div>
     );
@@ -52,8 +52,8 @@ export function RankingList({
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm tabular-nums">
-        <thead className="text-zinc-500 dark:text-zinc-400">
-          <tr className="border-b border-black/10 dark:border-white/10">
+        <thead className="text-[11px] uppercase tracking-[0.6px] text-text-faint">
+          <tr className="border-b border-border">
             <th className="py-2 pr-3 font-medium">#</th>
             <th className="py-2 pr-4 font-medium">Suspect / topic</th>
             <th className="w-[28%] py-2 pr-4 font-medium">Stuck score</th>
@@ -67,11 +67,8 @@ export function RankingList({
             const width = Math.max(0, (r.stuck_score / maxScore) * 100);
             const lowN = r.attempts < minConfidentN;
             return (
-              <tr
-                key={`${r.suspect}:${r.topic}`}
-                className="border-b border-black/5 dark:border-white/5"
-              >
-                <td className="py-3 pr-3 text-zinc-400 dark:text-zinc-500">{i + 1}</td>
+              <tr key={`${r.suspect}:${r.topic}`} className="border-b border-border/60">
+                <td className="py-3 pr-3 text-text-faint">{i + 1}</td>
 
                 <td className="py-3 pr-4">
                   {/* Drill-down: "show me every attempt behind this row" is just a pre-filtered
@@ -79,14 +76,12 @@ export function RankingList({
                       uses. Nothing is wired; constructing the URL IS constructing the view. */}
                   <Link
                     href={`/events?mod_id=${encodeURIComponent(modId)}&type=ConfrontationAttempted&suspect=${encodeURIComponent(r.suspect)}&topic=${encodeURIComponent(r.topic)}`}
-                    className="font-medium underline decoration-dotted underline-offset-4 hover:decoration-solid"
+                    className="font-medium text-text underline decoration-dotted underline-offset-4 hover:decoration-solid"
                     title={`See every attempt on ${titleCase(r.suspect)} / ${titleCase(r.topic)}`}
                   >
                     {titleCase(r.topic)}
                   </Link>
-                  <span className="block text-xs text-zinc-500 dark:text-zinc-400">
-                    {titleCase(r.suspect)}
-                  </span>
+                  <span className="block text-xs text-text-faint">{titleCase(r.suspect)}</span>
                 </td>
 
                 {/* The meter. Track + fill; width encodes stuck_score relative to the top row.
@@ -94,16 +89,20 @@ export function RankingList({
                     fill is one blue from the FrictionCharts ramp, so the page is one system. */}
                 <td className="py-3 pr-4">
                   <div className="flex items-center gap-2">
+                    {/* The meter now reads the `blue` TOKEN rather than the two hardcoded hexes
+                        it carried before. Those hexes were picked to sit on a zinc surface and
+                        were duplicated from FrictionCharts' ramp; on the warm palette they were
+                        the one element that would not have moved with the theme. */}
                     <div
-                      className="h-2.5 flex-1 overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/[0.08]"
+                      className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-raised"
                       role="presentation"
                     >
                       <div
-                        className="h-full rounded-full bg-[#2a78d6] dark:bg-[#5598e7]"
+                        className="h-full rounded-full bg-blue"
                         style={{ width: `${width.toFixed(1)}%` }}
                       />
                     </div>
-                    <span className="w-10 shrink-0 text-right text-xs text-zinc-500 dark:text-zinc-400">
+                    <span className="w-10 shrink-0 text-right text-xs text-text-faint">
                       {r.stuck_score.toFixed(2)}
                     </span>
                   </div>
@@ -114,8 +113,8 @@ export function RankingList({
                 <td
                   className={
                     lowN
-                      ? 'py-3 pr-4 text-right font-normal text-zinc-400 dark:text-zinc-500'
-                      : 'py-3 pr-4 text-right'
+                      ? 'py-3 pr-4 text-right font-normal text-text-faint'
+                      : 'py-3 pr-4 text-right text-text'
                   }
                 >
                   {r.attempts}
@@ -125,10 +124,12 @@ export function RankingList({
                 {/* raw → adjusted, side by side: the whole story of shrinkage in two cells. A
                     thin-sample row shows a big gap (raw 100% → adjusted ~55%); a well-supported
                     row barely moves. Raw is muted because it is the number NOT to trust. */}
-                <td className="py-3 pr-4 text-right text-zinc-400 line-through decoration-zinc-300 dark:decoration-zinc-600">
+                <td className="py-3 pr-4 text-right text-text-faint line-through decoration-border-strong">
                   {pct(r.raw_fail_rate)}
                 </td>
-                <td className="py-3 text-right font-medium">{pct(r.shrunk_fail_rate)}</td>
+                <td className="py-3 text-right font-medium text-text">
+                  {pct(r.shrunk_fail_rate)}
+                </td>
               </tr>
             );
           })}

@@ -47,14 +47,14 @@ export default async function EventsPage({ searchParams }: PageProps) {
   const query = toQuery(filters);
 
   return (
-    <main className="mx-auto w-full max-w-5xl px-6 py-12">
+    <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
       <SyntheticBanner />
-      <header className="mb-8">
-        <p className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+      <header className="mb-7">
+        <p className="text-xs font-semibold uppercase tracking-[1.2px] text-text-faint">
           OpenMW Analytics
         </p>
-        <h1 className="mt-1 text-2xl font-semibold">Event explorer</h1>
-        <p className="mt-2 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
+        <h1 className="mt-2 font-display text-[26px] font-semibold text-text">Event explorer</h1>
+        <p className="mt-2.5 max-w-[620px] text-sm leading-relaxed text-text-muted">
           Every event as it was recorded. Use it to confirm new instrumentation is firing with
           the payload you expect, or to drill into the individual sessions behind an aggregate.
         </p>
@@ -62,14 +62,14 @@ export default async function EventsPage({ searchParams }: PageProps) {
 
       {/* useSearchParams() suspends, so the filter bar needs a boundary. Falling back to a
           fixed-height block keeps the feed from jumping as it hydrates. */}
-      <Suspense fallback={<div className="mb-6 h-24 rounded-lg border border-zinc-200 dark:border-zinc-800" />}>
+      <Suspense fallback={<div className="mb-6 h-24 rounded-[10px] border border-border bg-surface" />}>
         <FilterBar mods={mods} />
       </Suspense>
 
       {/* No snapshot fallback here, unlike /stats/* -- an explorer that quietly shows old rows
           while claiming to be a live feed would defeat its own purpose. */}
       {error || !page ? (
-        <p className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+        <p className="rounded-lg border border-amber-border bg-amber-bg p-4 text-[13px] leading-relaxed text-amber">
           Could not reach the analytics API{error ? `: ${error}` : ''}. The feed is live-only, so
           there is nothing to show until it is reachable.
         </p>

@@ -3,11 +3,16 @@
 // Recharts must run client-side (SVG + hooks), so this is the 'use client'
 // boundary. The Server Component fetches and passes plain data in as props.
 //
-// Colors come from the dataviz skill's validated default palette. Recharts sets
-// `fill`/`stroke` as SVG *attributes*, where CSS var() does not resolve — so we
-// detect the theme here and pass concrete hexes per mode (blue is a contrast-safe
-// slot on both surfaces). Single series ⇒ no legend (the card title names it);
-// values are direct-labelled; a tooltip and a table view round out accessibility.
+// Recharts sets `fill`/`stroke` as SVG *attributes*, where a Tailwind class cannot reach and
+// `var()` does not resolve — so the theme is read in JS and handed over as concrete strings.
+// That read now lives in ONE place (lib/chartChrome.ts), which explains why; it used to be a
+// byte-identical copy in each of the three chart files. Single series ⇒ no legend (the card
+// title names it); values are direct-labelled; a tooltip and a table view round out
+// accessibility.
+//
+// The SERIES colour is the palette's `blue` token — the neutral-data slot (design docs 13 §2).
+// Blue carries no verdict here: a pass-rate bar is a magnitude, not a good or bad outcome, and
+// giving it a status colour would invite reading 40% as "amber, therefore concerning".
 
 import {
   Bar,
@@ -20,14 +25,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { useDarkMode } from '../lib/useDarkMode';
+import { useChartChrome } from '../lib/chartChrome';
 import type { ReasonStat, TopicStat } from '../lib/stats';
-
-function palette(dark: boolean) {
-  return dark
-    ? { ink: '#ffffff', muted: '#898781', grid: '#2c2c2a', series: '#3987e5' }
-    : { ink: '#0b0b0b', muted: '#898781', grid: '#e1e0d9', series: '#2a78d6' };
-}
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const titleCase = (s: string) =>
@@ -38,10 +37,10 @@ function TopicTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
   if (!active || !payload?.length) return null;
   const t = payload[0].payload;
   return (
-    <div className="rounded-md border border-black/10 bg-white px-3 py-2 text-sm shadow-lg dark:border-white/10 dark:bg-zinc-900">
-      <div className="font-medium">{titleCase(t.topic)}</div>
-      <div className="text-zinc-500 dark:text-zinc-400">{titleCase(t.suspect)}</div>
-      <div className="mt-1 tabular-nums">
+    <div className="rounded-md border border-border bg-surface px-3 py-2 text-[13px] shadow-lg">
+      <div className="font-medium text-text">{titleCase(t.topic)}</div>
+      <div className="text-text-faint">{titleCase(t.suspect)}</div>
+      <div className="mt-1 tabular-nums text-text-muted">
         {pct(t.pass_rate)} passed · {t.passes}/{t.attempts} attempts
       </div>
     </div>
@@ -49,8 +48,7 @@ function TopicTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
 }
 
 export function PassRateChart({ data }: { data: TopicStat[] }) {
-  const dark = useDarkMode();
-  const c = palette(dark);
+  const c = useChartChrome();
   if (!data.length) return <Empty />;
   const rows = data.map((d) => ({ ...d, label: titleCase(d.topic) }));
 
@@ -92,8 +90,7 @@ export function PassRateChart({ data }: { data: TopicStat[] }) {
 }
 
 export function FailureReasonChart({ data }: { data: ReasonStat[] }) {
-  const dark = useDarkMode();
-  const c = palette(dark);
+  const c = useChartChrome();
   if (!data.length) return <Empty label="No failed attempts yet." />;
   const rows = data.map((d) => ({ ...d, label: titleCase(d.reason) }));
 
@@ -117,8 +114,6 @@ export function FailureReasonChart({ data }: { data: ReasonStat[] }) {
 
 function Empty({ label = 'No data yet.' }: { label?: string }) {
   return (
-    <div className="flex h-32 items-center justify-center text-sm text-zinc-500 dark:text-zinc-400">
-      {label}
-    </div>
+    <div className="flex h-32 items-center justify-center text-[13px] text-text-faint">{label}</div>
   );
 }

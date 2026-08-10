@@ -1,26 +1,237 @@
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════════════════════════════════════════════
+   THE THEME MECHANISM — read this before changing a colour anywhere.
+
+   ⭐ THE DECISION THAT MATTERS IS THE LINE BELOW, not the palette.
+
+   The shipped dashboard had no theme *control*. It had ~200 `dark:` utilities compiled against
+   Tailwind's default `dark` variant, which is `@media (prefers-color-scheme: dark)` — the OS
+   decides, the user cannot. The design system (design docs 13 §5) calls for a real toggle,
+   because an internal tool's users have a preference regardless of what their OS is set to.
+
+   `@custom-variant dark` REDEFINES what the `dark:` prefix compiles to: the attribute, not the
+   media query.
+
+   ⚠️ BE HONEST ABOUT WHAT THIS LINE IS FOR NOW. It was written as the cheap alternative to
+   rewriting ~200 `dark:` utilities into semantic tokens — and then the refresh rewrote them
+   anyway, because the palette changed from zinc to a warm neutral and every one of those
+   utilities named a zinc. So it is NOT currently carrying any markup. Grep confirms it: no
+   `dark:` utility survives in app/.
+
+   It is kept deliberately, as a TRAP GUARD rather than as a migration aid. `dark:` is the
+   reflex — it is what Tailwind's own docs show, what an LLM will suggest, and what any
+   third-party component ships. Without this line the next `dark:bg-…` written in this codebase
+   would key off the OS while everything around it keys off the toggle, and the result is a page
+   that is half themed for exactly the users who set a preference that disagrees with their OS.
+   One line to make the wrong reflex produce the right behaviour.
+
+   ⚠️ SECOND CONSEQUENCE, a real loss: `prefers-color-scheme` no longer reaches the stylesheet at
+   all. Honouring the OS default is now the BOOT SCRIPT's job (app/layout.tsx) — it seeds the
+   attribute from localStorage, falling back to the media query. If that script is ever removed,
+   the site does not "fall back to the OS"; it pins to light for everyone. The script is
+   load-bearing, not an optimisation.
+   ═══════════════════════════════════════════════════════════════════════════════════════════ */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ── The palettes (design docs 13 §2) ────────────────────────────────────────────────────────
+   Two FULL palettes, not one filtered into the other. Dark is not light-inverted: contrast was
+   set per mode, which is why (for one example) the accents are high-lightness/low-chroma on dark
+   and low-lightness/high-chroma on light rather than the same values swapped.
+
+   OKLCH because the hue angle is stable across lightness — red at 25° reads as the same red in
+   both modes, where the equivalent HSL pair drifts. Each accent family holds its hue and trades
+   only lightness/chroma, so "the red one" is recognisably one colour across the whole site.
+
+   Warm neutral (hue ~55-60, chroma 0.004-0.014) rather than pure grey: an ash/parchment register
+   that stays close enough to neutral that data colours are still read as the coloured things. */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  --bg: oklch(98% 0.004 60);
+  --surface: oklch(99% 0.002 60);
+  --surface-raised: oklch(96% 0.005 60);
+  --border: oklch(88% 0.007 60);
+  --border-strong: oklch(78% 0.009 60);
+  --text: oklch(22% 0.006 60);
+  --text-muted: oklch(45% 0.008 60);
+  /* ⚠️ 53%, not the handoff's 58% — see the note under the dark palette. */
+  --text-faint: oklch(53% 0.008 60);
+
+  --red: oklch(48% 0.16 25);
+  --red-bg: oklch(95% 0.03 25);
+  --red-border: oklch(80% 0.09 25);
+
+  --violet: oklch(50% 0.15 295);
+  --violet-bg: oklch(95% 0.025 295);
+  --violet-border: oklch(80% 0.08 295);
+
+  --amber: oklch(52% 0.13 75);
+  --amber-bg: oklch(95% 0.03 75);
+  --amber-border: oklch(80% 0.08 75);
+
+  --blue: oklch(50% 0.13 235);
+  --blue-bg: oklch(95% 0.025 235);
+  --blue-border: oklch(80% 0.07 235);
+
+  --green: oklch(48% 0.13 150);
+  --green-bg: oklch(95% 0.025 150);
+  --green-border: oklch(80% 0.07 150);
+
+  /* ⚠️ The one token that is NOT swapped for contrast against a flipped surface — it is the
+     same bronze idea in both modes, just light enough or dark enough to be seen. It carries no
+     status meaning (13 §2), which is precisely why it can be exempt: nothing is decoded from it. */
+  --bronze: oklch(50% 0.07 60);
+
+  /* Grain (13 §4, touch 3). Near-invisible by design; the token exists so `[data-flavor="off"]`
+     can zero it without a second rule. */
+  --grain: oklch(0% 0 0 / 0.015);
 }
 
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: oklch(15% 0.008 55);
+  --surface: oklch(19% 0.008 55);
+  --surface-raised: oklch(23% 0.01 55);
+  --border: oklch(30% 0.012 55);
+  --border-strong: oklch(40% 0.014 55);
+  --text: oklch(93% 0.004 60);
+  --text-muted: oklch(70% 0.008 60);
+
+  /* ═════════════════════════════════════════════════════════════════════════════════════════
+     ⚠️ THE ONE TOKEN CHANGED FROM THE DESIGN HANDOFF: 62%, not the specified 52%.
+     (Light is likewise 53%, not 58%.)
+
+     MEASURED, not judged. A WCAG contrast audit over the rendered pages in both themes — text
+     colour against the first non-transparent ancestor background, sampled through a canvas
+     because the palette computes to `lab()` and cannot be regex-parsed as sRGB — found
+     `textFaint` was the ONLY token in the palette failing AA:
+
+     | pair | spec value | measured |
+     | --- | --- | --- |
+     | textFaint on dark `bg` | 52% | 3.34:1 (need 4.5) |
+     | textFaint on light `bg` | 58% | 4.17:1 (need 4.5) |
+
+     Every other token in the handoff clears AA on every surface it lands on, several with room
+     to spare — so this is a correction to one value, not a rejection of the palette. Hue and
+     chroma are untouched, and the muted → faint step is still visible (70 → 62 dark,
+     45 → 53 light), so the three-level type hierarchy the design depends on survives.
+
+     ⭐ WHY THIS ONE MATTERS MORE THAN "small grey text is a bit light". `textFaint` is what
+     carries the `n = …` sample-size lines, the `Cited records:` provenance line and the mono
+     record ids. Those are exactly the lines this project treats as load-bearing (10 §3.3) —
+     the ones that stop a reader mistaking a thin sample for a measurement, or a generated
+     sentence for a computed one. Making the caveat the hardest thing on the page to read
+     inverts the whole point of showing it.
+
+     Re-check with the audit script rather than by eye if these values are ever revisited.
+     ═════════════════════════════════════════════════════════════════════════════════════════ */
+  --text-faint: oklch(62% 0.008 60);
+
+  --red: oklch(75% 0.15 25);
+  --red-bg: oklch(27% 0.05 25);
+  --red-border: oklch(40% 0.08 25);
+
+  --violet: oklch(78% 0.12 295);
+  --violet-bg: oklch(27% 0.045 295);
+  --violet-border: oklch(40% 0.075 295);
+
+  --amber: oklch(80% 0.13 75);
+  --amber-bg: oklch(27% 0.045 75);
+  --amber-border: oklch(42% 0.07 75);
+
+  --blue: oklch(76% 0.11 235);
+  --blue-bg: oklch(26% 0.04 235);
+  --blue-border: oklch(38% 0.07 235);
+
+  --green: oklch(76% 0.12 150);
+  --green-bg: oklch(26% 0.045 150);
+  --green-border: oklch(38% 0.07 150);
+
+  --bronze: oklch(70% 0.08 60);
+
+  --grain: oklch(100% 0 0 / 0.02);
+}
+
+/* ── Exposing the palette to Tailwind ────────────────────────────────────────────────────────
+   `@theme inline` ADDS these to the utility namespace without replacing Tailwind's defaults, so
+   `bg-surface` and `bg-zinc-900` both still compile. Tailwind's own scale is left in place as a
+   safety net for anything not yet converted, not as an invitation — new markup uses the tokens.
+
+   `inline` (rather than plain `@theme`) means the utility emits `var(--surface)` instead of the
+   value resolved at build time — which is the whole point, since the value changes at runtime
+   when the attribute flips.
+
+   Names track the handoff's token table verbatim so a colour on screen can be traced back to a
+   row in design docs 13 §2. `bg-bg` reads oddly; being greppable against the spec is worth it. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-red: var(--red);
+  --color-red-bg: var(--red-bg);
+  --color-red-border: var(--red-border);
+
+  --color-violet: var(--violet);
+  --color-violet-bg: var(--violet-bg);
+  --color-violet-border: var(--violet-border);
+
+  --color-amber: var(--amber);
+  --color-amber-bg: var(--amber-bg);
+  --color-amber-border: var(--amber-border);
+
+  --color-blue: var(--blue);
+  --color-blue-bg: var(--blue-bg);
+  --color-blue-border: var(--blue-border);
+
+  --color-green: var(--green);
+  --color-green-bg: var(--green-bg);
+  --color-green-border: var(--green-border);
+
+  --color-bronze: var(--bronze);
+
+  /* Body and data stay in the system stack — dry and technical, matching the register the
+     dashboard already had. Display is Spectral and is used for page H1s and the wordmark ONLY
+     (13 §3): the "old codex" gesture belongs on titles, never on a number someone has to read. */
+  --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica,
+    Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-spectral), Georgia, "Times New Roman", serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+
+  /* The grain (13 §4). A 1px dot on a 4px lattice at ~2% alpha — legible as texture only when
+     you go looking for it, which is the brief: "a gesture, not a theme". */
+  background-image: radial-gradient(circle at 1px 1px, var(--grain) 1px, transparent 0);
+  background-size: 4px 4px;
+  background-attachment: fixed;
+
+  /* ⚠️ Colour only. A blanket `transition: all` here would also animate layout properties on
+     every render, which is how a theme toggle ends up making unrelated interactions feel laggy. */
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+/* The `flavorIntensity: 'off'` prop from the prototype, as an attribute. Kept because the grain
+   is the one flavour touch that could plausibly annoy someone on a low-quality display. */
+[data-flavor="off"] body {
+  background-image: none;
+}
+
+/* Focus is a semantic token rather than the browser default, so it survives on both surfaces —
+   the default outline is nearly invisible against the dark palette's raised surfaces. */
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }

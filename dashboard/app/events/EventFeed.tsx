@@ -23,6 +23,32 @@ function fmtTime(epochMs: string): string {
   });
 }
 
+// A one-line preview of the payload, so a collapsed row still says something specific (design
+// docs 13 §6 — the explorer's job is confirming instrumentation fires with the payload you
+// expect, and "ConfrontationAttempted" alone does not answer that).
+//
+// ⚠️ SLICED BEFORE IT IS RENDERED, not clipped with CSS. `data` is arbitrary mod-supplied JSON;
+// a mod that ships a 40 KB blob would otherwise put 40 KB of text into the DOM on every row and
+// hide it with `overflow`. Truncating the STRING keeps the cost proportional to what is shown.
+const PREVIEW_MAX = 140;
+
+function summarise(data: unknown): string {
+  if (data === null || typeof data !== 'object') return '';
+  const parts = Object.entries(data as Record<string, unknown>).map(([k, v]) => {
+    const value =
+      v === null || v === undefined
+        ? '∅'
+        : typeof v === 'object'
+          ? Array.isArray(v)
+            ? `[${v.length}]`
+            : '{…}'
+          : String(v);
+    return `${k}=${value}`;
+  });
+  const line = parts.join(' · ');
+  return line.length > PREVIEW_MAX ? `${line.slice(0, PREVIEW_MAX)}…` : line;
+}
+
 export function EventFeed({
   firstPage,
   query,
@@ -71,7 +97,7 @@ export function EventFeed({
 
   if (rows.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-zinc-300 p-8 text-center text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+      <p className="rounded-lg border border-dashed border-border p-8 text-center text-[13px] text-text-faint">
         No events match these filters.
       </p>
     );
@@ -79,33 +105,47 @@ export function EventFeed({
 
   return (
     <div>
-      <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
+      {/* Cards with their own borders rather than a divided list: an expanded row's payload block
+          needs a container to sit inside, and a `divide-y` list gives it none — the <pre> would
+          bleed to the full page width and stop reading as part of its row. */}
+      <ul className="space-y-2">
         {rows.map((e) => {
           // (session_id, seq) is the primary key -- the only guaranteed-unique row identity.
           // Using the array index here would rebind state to the wrong row on append.
           const key = `${e.session_id}:${e.seq}`;
           const isOpen = expanded === key;
+          const preview = summarise(e.data);
           return (
-            <li key={key} className="py-2">
+            <li
+              key={key}
+              className={`rounded-lg border bg-surface transition-colors ${
+                isOpen ? 'border-border-strong' : 'border-border'
+              }`}
+            >
               <button
                 type="button"
-                className="flex w-full items-baseline gap-3 text-left hover:opacity-80"
+                className="w-full px-3.5 py-2.5 text-left"
                 onClick={() => setExpanded(isOpen ? null : key)}
                 aria-expanded={isOpen}
               >
-                <span className="w-40 shrink-0 font-mono text-xs text-zinc-500 dark:text-zinc-400">
-                  {fmtTime(e.ts)}
+                <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="font-mono text-[11px] text-text-faint">{fmtTime(e.ts)}</span>
+                  <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[11px] text-text-muted">
+                    {e.mod_id}
+                  </span>
+                  <span className="text-[13px] font-semibold text-text">{e.type}</span>
+                  <span className="ml-auto shrink-0 font-mono text-[11px] text-text-faint">
+                    {e.session_id.slice(0, 8)}…#{e.seq}
+                  </span>
                 </span>
-                <span className="w-16 shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-center text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                  {e.mod_id}
-                </span>
-                <span className="font-medium">{e.type}</span>
-                <span className="ml-auto shrink-0 font-mono text-xs text-zinc-400 dark:text-zinc-500">
-                  {e.session_id.slice(0, 8)}…#{e.seq}
-                </span>
+                {preview && (
+                  <span className="mt-1 block truncate font-mono text-[11px] text-text-muted">
+                    {preview}
+                  </span>
+                )}
               </button>
               {isOpen && (
-                <pre className="mt-2 overflow-x-auto rounded bg-zinc-50 p-3 text-xs dark:bg-zinc-900">
+                <pre className="mx-3.5 mb-3 overflow-x-auto whitespace-pre-wrap break-words rounded bg-surface-raised p-3 font-mono text-[11px] leading-relaxed text-text-muted">
                   {JSON.stringify(e.data, null, 2)}
                 </pre>
               )}
@@ -120,19 +160,17 @@ export function EventFeed({
             type="button"
             onClick={loadMore}
             disabled={loading}
-            className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+            className="rounded-md border border-border bg-surface px-3.5 py-2 text-[13px] font-medium text-text transition-colors hover:bg-surface-raised disabled:opacity-50"
           >
             {loading ? 'Loading…' : 'Load more'}
           </button>
         ) : (
           // Explicit terminator from the API (nextCursor === null), not inferred from a short
           // page -- which would be wrong whenever a page lands exactly on the boundary.
-          <span className="text-sm text-zinc-500 dark:text-zinc-400">End of feed.</span>
+          <span className="text-[13px] text-text-faint">End of feed.</span>
         )}
-        <span className="text-sm text-zinc-500 dark:text-zinc-400">
-          {rows.length.toLocaleString()} loaded
-        </span>
-        {error && <span className="text-sm text-red-600 dark:text-red-400">{error}</span>}
+        <span className="text-[13px] text-text-muted">{rows.length.toLocaleString()} loaded</span>
+        {error && <span className="text-[13px] text-red">{error}</span>}
       </div>
     </div>
   );

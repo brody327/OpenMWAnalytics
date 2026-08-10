@@ -1,36 +1,31 @@
 'use client';
 
-import { useSyncExternalStore } from 'react';
+import { useTheme } from './theme';
 
-// Whether the OS is asking for a dark colour scheme.
+// Whether the page is currently rendering dark.
 //
-// This existed three times, byte-identical, in the three chart files — each as a `useState` +
-// `useEffect` pair that called `setDark(mq.matches)` on mount. That works, but it is the shape
-// `react-hooks/set-state-in-effect` flags, and the rule is right: it renders once with the wrong
-// answer, then immediately re-renders with the right one. On a chart that means a flash of
-// light-theme axes on a dark page.
+// ⚠️ THE SOURCE CHANGED, AND THAT IS THE POINT OF THIS FILE. It used to read
+// `window.matchMedia('(prefers-color-scheme: dark)')` — correct while the OS was the only thing
+// that could pick a theme. It no longer is: the site has a real toggle (design docs 13 §5), and
+// the OS query cannot see it.
 //
-// `useSyncExternalStore` is the hook built for exactly this — reading a value that lives OUTSIDE
-// React and changes on its own. React reads the current value during render, so the first paint
-// is already correct, and there is no state to keep in sync.
+// Left as it was, this would have failed in the quietest possible way. Nothing throws, nothing
+// logs, the page themes correctly — and the three Recharts files keep painting their axes,
+// gridlines and tooltips for whatever the OS asked for, because they are the only consumers of
+// this hook. A user who toggles to dark gets a dark page with light-theme charts on it.
 //
-// ⚠️ The third argument is the SERVER snapshot, and it is not optional here. These charts are
-// imported by Server Components; without it React throws during SSR, because `window` does not
-// exist. `false` is the honest server answer: the server cannot know the client's colour scheme,
-// so it renders light and the client corrects on hydration.
-
-const QUERY = '(prefers-color-scheme: dark)';
-
-function subscribe(onChange: () => void) {
-  const mq = window.matchMedia(QUERY);
-  mq.addEventListener('change', onChange);
-  return () => mq.removeEventListener('change', onChange);
-}
+// So the hook now delegates to the ONE source of truth (lib/theme.ts → the `data-theme`
+// attribute) and every reader moves together by construction.
+//
+// The original reason for `useSyncExternalStore` still holds and is documented there: this is a
+// value that lives outside React, React reads it during render rather than in an effect, and the
+// server snapshot is the honest "the server cannot know".
+//
+// KEPT AS A SEPARATE HOOK rather than replacing the call sites with `useTheme() === 'dark'`.
+// The charts want a boolean — every one of them immediately branches on it to pick a hex — and
+// pushing that comparison into three files would put the string 'dark' in three more places for
+// no gain.
 
 export function useDarkMode(): boolean {
-  return useSyncExternalStore(
-    subscribe,
-    () => window.matchMedia(QUERY).matches, // client snapshot
-    () => false, // server snapshot — see above
-  );
+  return useTheme() === 'dark';
 }

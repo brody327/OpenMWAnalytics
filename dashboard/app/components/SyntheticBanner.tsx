@@ -17,7 +17,7 @@ export function SyntheticBanner() {
   return (
     <div
       role="note"
-      className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+      className="mb-6 rounded-lg border border-amber-border bg-amber-bg px-4 py-3 text-[13px] leading-relaxed text-amber"
     >
       <strong className="font-semibold">Includes seeded demo data.</strong>{' '}
       This public instance is padded with ~180,000 generated events so the aggregation, pagination

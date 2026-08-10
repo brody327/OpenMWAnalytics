@@ -77,17 +77,25 @@ export function EventFilters({ mods }: { mods: ModRow[] }) {
   const current = (key: FilterKey) => searchParams.get(key) ?? '';
   const activeCount = FILTER_KEYS.filter((k) => searchParams.get(k)).length;
 
+  // Shared control chrome. Native <select> and <input> are kept rather than replaced with custom
+  // dropdowns: the design (13 §6) calls for bordered native controls, and the platform's own
+  // widgets already carry keyboard support, mobile pickers and screen-reader semantics that a
+  // div-based replica would have to re-earn. `color-scheme` (globals.css) is what makes the
+  // native popup itself dark, which no amount of Tailwind on this element can do.
+  const control =
+    'rounded-md border border-border bg-surface px-2.5 py-[7px] text-[12.5px] text-text';
+
   return (
     <div
-      className="mb-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+      className="mb-6 rounded-[10px] border border-border bg-surface p-4"
       // Communicates "working" to assistive tech, not just visually.
       aria-busy={isPending}
     >
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-zinc-500 dark:text-zinc-400">Mod</span>
+        <label className="flex flex-col gap-1.5 text-[12.5px]">
+          <span className="text-text-faint">Mod</span>
           <select
-            className="rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-700"
+            className={control}
             value={current('mod_id')}
             onChange={(e) => commit({ mod_id: e.target.value })}
           >
@@ -100,10 +108,10 @@ export function EventFilters({ mods }: { mods: ModRow[] }) {
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-zinc-500 dark:text-zinc-400">Event type</span>
+        <label className="flex flex-col gap-1.5 text-[12.5px]">
+          <span className="text-text-faint">Event type</span>
           <select
-            className="rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-700"
+            className={control}
             value={current('type')}
             onChange={(e) => commit({ type: e.target.value })}
           >
@@ -116,10 +124,10 @@ export function EventFilters({ mods }: { mods: ModRow[] }) {
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-zinc-500 dark:text-zinc-400">Source</span>
+        <label className="flex flex-col gap-1.5 text-[12.5px]">
+          <span className="text-text-faint">Source</span>
           <select
-            className="rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-700"
+            className={control}
             value={current('env')}
             onChange={(e) => commit({ env: e.target.value })}
           >
@@ -132,18 +140,18 @@ export function EventFilters({ mods }: { mods: ModRow[] }) {
         {/* Draft state: committed on submit, not on keystroke. A <form> gives us Enter-to-submit
             for free, and keeps the interaction working without JavaScript reasoning. */}
         <form
-          className="flex flex-col gap-1 text-sm"
+          className="flex flex-col gap-1.5 text-[12.5px]"
           onSubmit={(e) => {
             e.preventDefault();
             commit({ session_id: draftSession });
           }}
         >
-          <label className="text-zinc-500 dark:text-zinc-400" htmlFor="session-filter">
+          <label className="text-text-faint" htmlFor="session-filter">
             Session id
           </label>
           <input
             id="session-filter"
-            className="rounded border border-zinc-300 bg-transparent px-2 py-1 font-mono text-xs dark:border-zinc-700"
+            className={`${control} font-mono text-[11px] placeholder:text-text-faint`}
             placeholder="uuid, then Enter"
             value={draftSession}
             onChange={(e) => setDraftSession(e.target.value)}
@@ -154,7 +162,7 @@ export function EventFilters({ mods }: { mods: ModRow[] }) {
         {activeCount > 0 && (
           <button
             type="button"
-            className="rounded border border-zinc-300 px-2 py-1 text-sm text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className={`${control} font-medium text-text-muted transition-colors hover:bg-surface-raised`}
             onClick={() => {
               setDraftSession('');
               commit(Object.fromEntries(FILTER_KEYS.map((k) => [k, ''])));
@@ -164,9 +172,7 @@ export function EventFilters({ mods }: { mods: ModRow[] }) {
           </button>
         )}
 
-        {isPending && (
-          <span className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</span>
-        )}
+        {isPending && <span className="text-[12.5px] text-text-faint">Loading…</span>}
       </div>
     </div>
   );

@@ -6,14 +6,14 @@ import Link from 'next/link';
 
 export default function ModNotFound() {
   return (
-    <main className="mx-auto w-full max-w-4xl px-6 py-12">
-      <h1 className="text-3xl font-semibold tracking-tight">Mod not found</h1>
-      <p className="mt-2 text-zinc-600 dark:text-zinc-400">
+    <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
+      <h1 className="font-display text-[26px] font-semibold text-text">Mod not found</h1>
+      <p className="mt-2.5 text-sm text-text-muted">
         No mod with that id has reported any telemetry yet.
       </p>
       <Link
         href="/"
-        className="mt-6 inline-block text-sm underline decoration-dotted underline-offset-4"
+        className="mt-6 inline-block text-[13px] text-text-muted underline decoration-dotted underline-offset-4 transition-colors hover:text-text"
       >
         ← Back to overview
       </Link>
