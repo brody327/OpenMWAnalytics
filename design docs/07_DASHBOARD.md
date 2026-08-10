@@ -569,3 +569,40 @@ upstream is down the page says so and shows nothing.
 the `security@25` insight to the `shortblade@25` card: a real-looking, actionable recommendation
 about the wrong gate. Verified by SSR against the live API: **25 cards, 25 distinct grains, 14
 distinct check_ids.**
+
+## 10. The landing page (2026-08-09) — and why it does not lead with "AI"
+
+`/` was a mod list: honest, and it buried everything. The obvious rebuild was a hero banner
+announcing the LLM layer, since that is the newest part. **Deliberately not done.**
+
+⭐ **The honest description of the model's role is modest** — one question out of six pipeline
+steps, four of which are SQL. Leading with "AI" invites *"so what does the model actually do?"*,
+and the true answer then reads as a let-down. Leading with the **finding** — a skill check nothing
+in the loaded content can satisfy — and *then* showing a model earning a narrow, defensible keep is
+the stronger claim, because it survives being asked about.
+
+The target role's brief is explicit about *"balancing human and technology intelligence"*, which
+reads as wariness of reaching for ML where a heuristic does. **Restraint about where a model
+belongs is the thing worth demonstrating**, not enthusiasm for having used one.
+
+Order, where each section justifies the next:
+
+1. **The finding** — `luck 100`, 70-point p90 shortfall, no remedy in base + Tribunal + Bloodmoon +
+   CCFF. Selected from live data, not hardcoded: if it stops being true the section disappears
+   rather than asserting it.
+2. **How it gets there** — the pull pipeline, six steps, ending at the corpus join.
+3. **Where a language model earns its keep** — the approved insight, with the ratio stated plainly:
+   four of six steps are queries; the model gets a fixed payload, no tools, one question.
+4. **The registry** — the mod list, with the synthetic banner.
+
+### ⚠️ Two things the page deliberately does
+
+**The banner sits above the registry, not at the top.** It labels the volume figures, which include
+seeded rows. At page top it would read as applying to the finding — and that section is computed
+from real play only. Placement is the difference between a true label and a false one.
+
+**No hardcoded corpus count.** The first draft read *"47,732 game records"*, the figure from the
+design docs. Prod actually holds **47,747** — the corpus has been re-ingested since. A constant in
+the copy sitting beside live-fetched numbers is derived-artefact drift in the presentation layer,
+and it would be stale again after the next ingest. It now says the same thing qualitatively.
+▶ If a count is wanted, fetch it; do not write it down.
