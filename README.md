@@ -132,7 +132,7 @@ npm-workspaces monorepo. The **only** part OpenMW loads is `mod/`.
 | `api/` | Express + Zod ingest & query API; Drizzle + Postgres; corpus ingest; insights. | Cloud (k3s on EC2) |
 | `dashboard/` | Next.js App Router read surface. | Cloud (Vercel) |
 | `k8s/` | Deployment, Service, Ingress, cert-manager issuers, rollup CronJob. | — |
-| `design docs/` | The design bible (numbered, teaching-style). Start at `00_README_INDEX.md`. | — |
+| `design docs/` | Numbered decision records — what was chosen, what was rejected, what settled it. Start at `00_README_INDEX.md`. | — |
 
 ## Quickstart
 
@@ -170,4 +170,12 @@ gate is not *rejected*, it is never found.
 
 The full reasoning — pipeline, envelope contract, event registry, data model, retrieval,
 deployment, and the AI layer — lives in [`design docs/`](./design%20docs/), written Why / How /
-Tradeoffs. Begin with [`00_README_INDEX.md`](./design%20docs/00_README_INDEX.md).
+Tradeoffs, including the cases where running the thing contradicted the design. Begin with [`00_README_INDEX.md`](./design%20docs/00_README_INDEX.md).
+
+## License
+
+[MIT](./LICENSE) — Brody Faust.
+
+Morrowind and OpenMW assets are the property of their respective owners; no game data is
+redistributed here. The corpus pipeline parses `.esm` files locally and never copies them into
+the repository or the cloud.

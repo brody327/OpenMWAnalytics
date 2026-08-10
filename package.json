@@ -1,6 +1,7 @@
 {
   "name": "openmw-analytics",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "description": "Telemetry & analytics platform for OpenMW mods — event ingestion pipeline, API, and dashboard.",
   "type": "module",

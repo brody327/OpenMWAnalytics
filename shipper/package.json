@@ -1,6 +1,7 @@
 {
   "name": "omwanalytics-shipper",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "OpenMW Analytics — log-tailing shipper: tails openmw.log, extracts OMWA1 events, POSTs to the ingest API.",
