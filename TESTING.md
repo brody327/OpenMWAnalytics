@@ -21,8 +21,16 @@ absent.
 | **Component** | The `'use client'` slice: URL⇄form state, and the React-key check | nothing | `npm test --workspace dashboard` |
 | **E2E** | Rendered pages against a running deployment | a live stack | `npm run test:e2e --workspace dashboard` |
 
-**117 API · 14 shipper · 25 component · 11 E2E — 167 tests.** `npm test` at the root runs the
+**117 API · 14 shipper · 25 component · 24 E2E — 180 tests.** `npm test` at the root runs the
 first four; E2E is separate because it needs something deployed.
+
+⭐ **E2E grew 11 → 24 on 2026-08-10 for a reason worth stating: a class of bug exists that no
+other layer can see.** A timestamp formatted without an explicit locale and time zone renders
+differently on the server than in the browser — but only when those are different machines. `next
+dev` and `next start` run both passes locally, in one zone, with one locale, so the strings always
+agree and every local check is green. In production it failed hydration, which made React replace
+`<html>`, which silently dropped the theme attribute set before paint. `e2e/theme.spec.ts` runs
+each page in `Asia/Kolkata` + `de-DE` precisely so the two sides cannot agree by accident.
 
 ### 1. Unit — the judgement, extracted on purpose
 

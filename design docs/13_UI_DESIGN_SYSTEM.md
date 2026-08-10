@@ -273,6 +273,62 @@ Verified: 205 rows → **21 bars, 21 distinct labels**, against live production 
 the rule (`SkillCharts.test.tsx`), each **mutation-checked** — reversing the comparison, summing
 attempts, and dropping the null guard each turn a different subset red.
 
+### ⭐⭐⭐ A TIMESTAMP BROKE THE THEME, IN PRODUCTION ONLY. The best bug of the session.
+
+Found by re-running the theme audit **against production after deploying** — every pre-push check
+had been local, and a local check was structurally incapable of seeing this.
+
+**Symptom.** `/events` loaded dark, then flipped to light a few hundred ms later. 6/6 reproducible
+on the deployed site. Not reproducible against `next dev` **or** a local `next start`, both of
+which showed one write and stayed dark.
+
+**Diagnosis, in three measurements** — each one taken because the previous guess was wrong:
+
+| # | instrument | what it said |
+| --- | --- | --- |
+| 1 | stack-trace trap on `setAttribute` | **two** writes: `dark` from the boot script, then `light` **from the minified React chunk** |
+| 2 | (after removing `data-theme` from the JSX) same trap | one write, but the attribute ended up `null` — and **no** removal was logged |
+| 3 | `MutationObserver` + identity check | **zero** mutations, and `documentElement !== the element captured at boot` |
+
+Measurement 3 is the one that cracked it. The root element was not being *edited*, it was being
+**replaced** — which is what React does when hydration fails. The console then named it:
+**Minified React error #418, `args[]=text`**.
+
+**Root cause.** `fmtTime` in `EventFeed` — a Client Component — called
+`toLocaleString(undefined, …)`: no locale, no time zone. That renders once on the server and again
+during hydration, on different machines. Vercel is UTC and picks up the server locale; the browser
+uses the visitor's. Different strings ⇒ failed hydration ⇒ React discards the server HTML and
+re-renders the document ⇒ **`<html>` is replaced, and the boot script's `data-theme` goes with it.**
+
+⭐ **The lesson is the chain, not the fix.** A date format string, in one Client Component, on one
+page, silently disabled a site-wide feature — in production only, via a mechanism (`<html>` being
+replaced) that neither of the first two instruments could see. Nothing logged anything a reader
+would connect to "the theme".
+
+⚠️ **`suppressHydrationWarning` was NOT the fix and would have hidden this.** It suppresses the
+*warning* about a mismatch, not the *reconciliation* that follows it.
+
+**Two fixes, and a decision.** The attribute is gone from the JSX (React cannot own what it never
+renders), and the timestamp is now explicit `en-US` + `UTC`, labelled. The server cannot know the
+visitor's zone, so the only deterministic options are "always UTC" or "render nothing until after
+mount"; UTC wins on merit — the feed exists to correlate a row against `openmw.log` and Postgres,
+and both are UTC. Two latent instances of the same class (bare `toLocaleString()` on numbers in
+`EventFeed` and `EventFilters`) were pinned to `en-US` while there.
+
+**The permanent check is the ROOT-CAUSE one, not the symptom.** `e2e/theme.spec.ts` asserts every
+page hydrates cleanly in **`Asia/Kolkata` + `de-DE`** — a half-hour offset so even the date can
+differ, and a locale whose number separators differ. Running it as en-US/UTC would agree with the
+server *by accident* and pass while broken. It can only mean anything against a deployment, which
+is what the suite targets by default.
+
+⭐ Mutation-checked against the real failure rather than a simulated one: run against the
+still-broken production it failed on `/events` with the right diagnostic, four other pages green.
+
+⚠️ **And it caught a bad assertion of my own.** The reload check used `waitUntil: 'commit'`, which
+fires before inline `<head>` scripts are guaranteed to have run. It had been passing *because* the
+server HTML still seeded `data-theme` — i.e. because of the bug being fixed. Now
+`domcontentloaded`.
+
 ### One defect the audit found that predates this work
 
 `Legend` paints each label in its **series colour**, and `wrapperStyle.color` does not override it —
