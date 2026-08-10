@@ -18,7 +18,6 @@
 // so the theme is detected here and concrete hexes are passed per mode — same
 // approach as ConfrontationCharts.
 
-import { useEffect, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -29,19 +28,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { useDarkMode } from '../lib/useDarkMode';
 import type { AfterFailureStat } from '../lib/stats';
-
-function useDarkMode(): boolean {
-  const [dark, setDark] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    setDark(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return dark;
-}
 
 // Ordered best → worst. The order IS the encoding; do not re-sort for aesthetics.
 //

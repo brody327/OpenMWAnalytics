@@ -13,7 +13,6 @@
 // server-side and shown as their own tiles; this chart shows the raw distance. One rule,
 // one place (api/src/stats/skills.ts).
 
-import { useEffect, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -25,19 +24,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { useDarkMode } from '../lib/useDarkMode';
 import type { CheckStat } from '../lib/stats';
-
-function useDarkMode(): boolean {
-  const [dark, setDark] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    setDark(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return dark;
-}
 
 function chrome(dark: boolean) {
   return dark

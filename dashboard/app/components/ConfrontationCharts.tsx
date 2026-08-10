@@ -9,7 +9,6 @@
 // slot on both surfaces). Single series ⇒ no legend (the card title names it);
 // values are direct-labelled; a tooltip and a table view round out accessibility.
 
-import { useEffect, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -21,19 +20,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { useDarkMode } from '../lib/useDarkMode';
 import type { ReasonStat, TopicStat } from '../lib/stats';
-
-function useDarkMode(): boolean {
-  const [dark, setDark] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    setDark(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return dark;
-}
 
 function palette(dark: boolean) {
   return dark

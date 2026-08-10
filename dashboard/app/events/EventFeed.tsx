@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { EventPage, EventRow } from '../lib/events';
 
 // The feed list. Client Component for two reasons: rows expand on click, and "Load more"
@@ -13,8 +13,9 @@ import type { EventPage, EventRow } from '../lib/events';
 //
 // NOTE what is NOT here: a useEffect that fetches on mount. That is the reflex an Angular
 // ngOnInit habit produces, and it would re-fetch data the server already sent, after paint,
-// twice in dev StrictMode. useEffect is for SYNCHRONISING with something outside React -- and
-// there is exactly one such case below, which is why it appears once and for that reason.
+// twice in dev StrictMode. useEffect is for SYNCHRONISING with something outside React, and
+// this component has nothing outside React to synchronise with -- so it has NO effects at all.
+// The one it used to have is dissected below, because why it was unnecessary is the useful part.
 
 function fmtTime(epochMs: string): string {
   return new Date(Number(epochMs)).toLocaleString(undefined, {
@@ -36,19 +37,17 @@ export function EventFeed({
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  // The one legitimate synchronisation: when the SERVER sends a new first page (the user
-  // changed a filter, so this component re-renders with different props), the accumulated
-  // client-side pages belong to the OLD filters and must be discarded.
+  // ⚠️ There was a `useEffect` here that reset every piece of state when `firstPage` changed,
+  // to stop page 2 of "all mods" sitting under page 1 of "ccff only". It was REDUNDANT: the
+  // call site already renders `<EventFeed key={query} …>`, so a filter change gives React a
+  // different key and it discards this component and mounts a fresh one. The props of a mounted
+  // instance never change, and the effect could never fire.
   //
-  // Without this, page 2 of "all mods" would still be sitting under page 1 of "ccff only" --
-  // stale rows that silently contradict the active filter. This is what useEffect is actually
-  // for: reconciling state with a source of truth that lives outside React (here, the URL).
-  useEffect(() => {
-    setRows(firstPage.events);
-    setCursor(firstPage.nextCursor);
-    setError(null);
-    setExpanded(null);
-  }, [firstPage]);
+  // Two copies of one rule is worse than one, and the effect was the weaker copy — it reset four
+  // state variables but forgot `loading`, so a filter changed mid-fetch would have left "Load
+  // more" disabled forever. Remounting resets everything by construction, including the field a
+  // hand-written reset can forget. Deleting it also clears `react-hooks/set-state-in-effect`,
+  // which was pointing at a real smell rather than a false positive.
 
   async function loadMore() {
     if (!cursor || loading) return;
