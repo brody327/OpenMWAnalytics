@@ -2,6 +2,7 @@ import { Suspense } from 'react';
 import { getEvents, getMods, toQuery, type EventFilters } from '../lib/events';
 import { EventFilters as FilterBar } from './EventFilters';
 import { EventFeed } from './EventFeed';
+import { SyntheticBanner } from "../components/SyntheticBanner";
 
 // /events — the raw event explorer (design docs 07).
 //
@@ -47,6 +48,7 @@ export default async function EventsPage({ searchParams }: PageProps) {
 
   return (
     <main className="mx-auto w-full max-w-5xl px-6 py-12">
+      <SyntheticBanner />
       <header className="mb-8">
         <p className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           OpenMW Analytics

@@ -16,6 +16,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getMods } from '../../lib/events';
 import { MOD_DASHBOARDS } from '../../components/modDashboards';
+import { SyntheticBanner } from "../../components/SyntheticBanner";
 
 // first_seen_at / last_seen_at arrive as epoch-MILLISECOND strings (the API casts a
 // bigint, which JSON serialises as a string), so Number() before Date(). Passing the
@@ -44,6 +45,7 @@ export default async function ModPage({
   if (error) {
     return (
       <main className="mx-auto w-full max-w-4xl px-6 py-12">
+      <SyntheticBanner />
         <p className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
           Could not reach the analytics API: {error}. Try again once it is back.
         </p>

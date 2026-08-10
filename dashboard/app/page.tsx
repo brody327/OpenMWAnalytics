@@ -8,12 +8,14 @@
 
 import Link from 'next/link';
 import { getMods } from './lib/events';
+import { SyntheticBanner } from "./components/SyntheticBanner";
 
 export default async function Home() {
   const { mods, error } = await getMods();
 
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-12">
+      <SyntheticBanner />
       <header className="mb-8">
         <p className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           OpenMW Analytics
