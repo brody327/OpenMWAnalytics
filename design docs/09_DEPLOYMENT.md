@@ -786,13 +786,67 @@ that collects nothing. Every failure mode that produces *no tests* — a renamed
 `testDir`, a glob that stops matching, a spec that fails to import — would have shown up as a green
 job.
 
-Both suites now assert a **minimum collected test count** after running. The E2E floor is 8 against
-a current 11: high enough that an entire spec file dropping out (the smaller holds 5) fails, low
-enough that deleting one obsolete test does not.
+Both suites now assert a **minimum collected test count** after running. Counting is done in Node
+rather than `jq` because a fixed-depth expression would silently undercount the day someone adds a
+`describe` level.
 
-Verified in both directions against real report files: 11 passes; one spec file alone gives 6 and 5,
-both fail; zero collected fails; a missing report fails. Counting is done in Node rather than `jq`
-because a fixed-depth expression would silently undercount the day someone adds a `describe` level.
+Verified in both directions against real report files: the full run passes; one spec file alone
+fails; zero collected fails; a missing report fails.
+
+### ⚠️ The floor went stale — and then a single total turned out to be the wrong shape entirely
+
+It was 8 against a current 11, chosen so that losing an entire spec file would fail here. By
+2026-08-10 the suite was **45** across four files of very unequal size (responsive 21, theme 13,
+gaps 6, provenance 5). Against 45, a floor of 8 would have let the **two largest files vanish
+together** and still reported green.
+
+Raising it was the obvious move and it does not work, because **no single total expresses the
+property**:
+
+| floor | losing `responsive` (21) | losing `provenance` (5) | 5 tests deleted |
+| --- | --- | --- | --- |
+| 30 | 24 → fails ✅ | 40 → **passes** ❌ | 40 → passes ✅ |
+| 41 | fails ✅ | fails ✅ | 40 → **fails** ❌ |
+
+So the guard now asserts **the file list**: every spec file must be present and non-empty, with the
+total kept only as a coarse backstop for a file that shrinks without disappearing. That detects a
+file that stops being collected *regardless of its size*, which is the failure the check exists for
+and the one a total can never see.
+
+⭐ Mutation-checked against real report files: the full run passes; **dropping the smallest file —
+which the total alone still passed at 40** — fails; an empty report fails.
+
+▶ **Add the filename to `REQUIRED` when you add a spec file.** That list is the guard.
+
+### 11.5 ⚠️ A dashboard-only commit gets NO post-deploy verification
+
+Named because this session shipped two production bugs through the gap and neither pipeline said a
+word.
+
+The `smoke` job above lives in **`build-api.yml`**, which is path-filtered to what the API image is
+built from. A commit touching only `dashboard/` therefore:
+
+| pipeline | what runs |
+| --- | --- |
+| `dashboard.yml` | typecheck · unit tests · `next build` — **and no deploy, and no E2E** |
+| `build-api.yml` | **nothing** — correctly, the API did not change |
+| Vercel | **deploys to production**, gated only by its own `next build` |
+
+So the dashboard reaches `omwanalytics.com` having passed a build and 25 jsdom tests, and the
+45-test E2E suite that targets production never runs. Both bugs found on 2026-08-10 —
+`/events` failing hydration (`13 §8`) and the 476px minimum width (`13 §9`) — are invisible to a
+build and to jsdom, and both were caught only by a human re-running audits against the live site
+afterwards.
+
+⚠️ **This is NOT fixed, and the honest reason is that the obvious fix is wrong.** Running the E2E
+suite from `dashboard.yml` on push would race Vercel: the job would start against whatever build
+happens to be live, which is usually the *previous* one, so a green result would mean nothing. Done
+properly it needs either a Vercel deployment webhook or a poll for the new deployment id — real
+work, and it is recorded here as owed rather than quietly skipped.
+
+▶ **Until then the manual step is load-bearing:** after a dashboard deploy, run
+`npx playwright test` (it targets production by default) and confirm the deployment actually
+flipped first. That is exactly what caught both bugs.
 
 ### 11.4 The lockfile was Windows + Linux only
 

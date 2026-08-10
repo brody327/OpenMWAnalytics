@@ -36,7 +36,7 @@ test.describe('responsive', () => {
         await page.goto(path, { waitUntil: 'networkidle' });
         await page.waitForTimeout(800);
 
-        const r = await page.evaluate((vw) => {
+        const r = await page.evaluate(() => {
           const de = document.documentElement;
           const sw = document.querySelector('[role="switch"]');
           const b = sw?.getBoundingClientRect();
@@ -44,9 +44,9 @@ test.describe('responsive', () => {
             // The single most important signal. If the DOCUMENT scrolls sideways, something is
             // wider than the screen and no amount of styling elsewhere hides it.
             overflow: Math.max(de.scrollWidth, document.body.scrollWidth) - de.clientWidth,
-            toggle: b ? { left: b.left, right: b.right, w: b.width } : null,
+            toggle: b ? { left: b.left, right: b.right } : null,
           };
-        }, width);
+        });
 
         expect(r.overflow, `the page scrolls horizontally by ${r.overflow}px`).toBeLessThanOrEqual(1);
 
@@ -56,7 +56,7 @@ test.describe('responsive', () => {
         expect(r.toggle!.left, 'the theme toggle is off the left edge').toBeGreaterThanOrEqual(0);
         expect(
           r.toggle!.right,
-          `the theme toggle ends at ${Math.round(r.toggle!.right)}px, past the ${vwLabel(width)} viewport`,
+          `the theme toggle ends at ${Math.round(r.toggle!.right)}px, past the ${width}px viewport`,
         ).toBeLessThanOrEqual(width + 1);
 
         await ctx.close();
@@ -97,7 +97,3 @@ test.describe('responsive', () => {
     await ctx.close();
   });
 });
-
-function vwLabel(w: number) {
-  return `${w}px`;
-}

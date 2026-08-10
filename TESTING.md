@@ -215,7 +215,11 @@ Done so far, both directions each time:
 | Cursor reset on filter change | delete the `params.delete('cursor')` line | 1 test fails |
 | Delete-vs-empty param | `params.delete(key)` → `params.set(key, '')` | 2 tests fail |
 | SearchBox submit guard | remove the trim/duplicate early return | 2 tests fail (see the caveat above) |
-| E2E spec-count floor | report with one spec file, then with none | fails at 6, 5, and 0 |
+| E2E spec-file guard | drop the SMALLEST spec file from a real report (40 of 45 left) | fails — the total alone still passed |
+| E2E spec-file guard | empty report / no report written | fails |
+| Margin-chart grain (`collapseToChecks`) | reverse the margin comparison · sum `attempts` · drop the null guard | 1, 2 and 2 tests fail respectively |
+| Theme survives load (`/events`) | render `data-theme` as a JSX prop again | fails **only against a deployment** — 6 msgs, all client-nav |
+| Responsive header | revert to the single-row `flex-1 flex-wrap` nav | 16 of 21 fail at 320/375/414 |
 | The `env` filter | — | verified by data: `real` 3 gates vs `all` 6,687 |
 
 The reverse direction matters as much. After each mutation the change is reverted and the test must
@@ -275,6 +279,21 @@ glob would read as green. Each job asserts a **minimum collected count** after r
 the same failure shape this pipeline has already been bitten by twice: a mutable tag that
 triggered no rollout, and a path filter that queued no run. Nothing errored either time; the
 Actions tab was simply empty.
+
+⚠️ **That floor was a constant, it went stale, and then a total turned out to be the wrong shape.**
+It was 8 against a current 11. By 2026-08-10 the suite was 45 across four files of unequal size
+(responsive 21, theme 13, gaps 6, provenance 5) — a floor of 8 would have let the two largest
+vanish together and still reported green. But raising it does not fix the property either: a floor
+of 30 misses `provenance` disappearing (40 left), and a floor of 41 trips on five deleted tests.
+The E2E guard now asserts **the file list** — every spec file present and non-empty — with the
+total as a coarse backstop. ▶ Add the filename to `REQUIRED` when you add a spec file
+(`09 §11.3`).
+
+⚠️ **And the E2E suite does not run at all for a dashboard-only commit** (`09 §11.5`). The smoke
+job lives in the path-filtered API workflow, so a `dashboard/`-only push reaches production via
+Vercel having passed a build and the 25 jsdom tests — nothing more. Both production bugs found on
+2026-08-10 went through that gap. Running it manually after a dashboard deploy is currently
+load-bearing, not optional.
 
 The E2E `smoke` job runs after the rollout and drives the deployed dashboard against the API that
 was just shipped. `/version` proves the right *image* is serving; it cannot prove the thing is

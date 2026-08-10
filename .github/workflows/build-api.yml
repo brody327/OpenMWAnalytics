@@ -379,9 +379,18 @@ jobs:
       # the "green because nothing ran" shape this pipeline has already been bitten by twice
       # (a mutable tag that triggered no rollout; a path filter that queued no run).
       #
-      # The floor is 8 against a current 11: high enough that an entire spec file dropping out
-      # (the smaller is 5) fails here, low enough that deleting one obsolete test does not.
-      - name: Assert the suite actually ran
+      # ⚠️ A SINGLE TOTAL CANNOT EXPRESS WHAT THIS GUARD IS FOR, and pretending otherwise is how
+      # it went stale. The floor was 8 against a current 11, chosen so that losing an entire spec
+      # file would fail. The suite is now 45 across four files of very unequal size
+      # (responsive 21, theme 13, gaps 6, provenance 5) — and no single total works:
+      #
+      #   floor 30 -> losing `responsive` (24 left) fails, but losing `theme` (32) passes
+      #   floor 41 -> catches any one file, but five deleted tests trip it
+      #
+      # So the total is only the coarse half. The REAL guard is the file list: every spec file
+      # must be present and non-empty. That detects the failure this exists for — a file that
+      # stops being collected — regardless of how big it was, which a total never can.
+      - name: Assert every spec file actually ran
         if: always()
         working-directory: dashboard
         run: |
@@ -392,9 +401,20 @@ jobs:
           node -e '
             const r = JSON.parse(require("fs").readFileSync("results.json", "utf8"));
             const walk = (s) => (s.specs ?? []).length + (s.suites ?? []).reduce((a, x) => a + walk(x), 0);
-            const n = (r.suites ?? []).reduce((a, s) => a + walk(s), 0);
-            console.log(`collected ${n} specs`);
-            if (n < 8) { console.log(`::error::expected >=8 E2E specs, collected ${n}`); process.exit(1); }
+            const byFile = new Map((r.suites ?? []).map((s) => [s.title, walk(s)]));
+            const n = [...byFile.values()].reduce((a, x) => a + x, 0);
+            console.log([...byFile].map(([f, c]) => `${f}=${c}`).join(", ") + ` (total ${n})`);
+
+            // ⭐ The real guard. Add a file here when you add a spec file — the failure this
+            // catches is one that stops being collected, and a total cannot see a small file go.
+            const REQUIRED = ["gaps.spec.ts", "provenance.spec.ts", "theme.spec.ts", "responsive.spec.ts"];
+            const missing = REQUIRED.filter((f) => !byFile.get(f));
+            if (missing.length) {
+              console.log(`::error::spec file(s) collected NOTHING: ${missing.join(", ")}`);
+              process.exit(1);
+            }
+            // Coarse backstop for a file that shrinks to near-nothing without disappearing.
+            if (n < 30) { console.log(`::error::expected >=30 E2E specs, collected ${n}`); process.exit(1); }
           '
 
       - name: Upload the report on failure
