@@ -672,7 +672,7 @@ path, where 30 detoasts are free. It would speed up nothing a user touches. Reco
 
 ## 10b. ⚠️ What the stored vectors CANNOT prove about Matryoshka (measured 2026-07-27)
 
-Run as a hands-on re-teach of §5's truncation argument, and it corrected the argument instead.
+Run to validate §5's truncation argument, and it corrected the argument instead.
 
 **The hypothesis tested:** if information is "front-loaded," the *first* quarter of a stored vector
 should out-rank the *last* quarter. Ground truth = exact-KNN top-10 over the full 384; the metric is
@@ -893,7 +893,7 @@ The obvious fix — ingest Tribunal, Bloodmoon and the rest — is worse on thre
 
 ⚠️ **CORRECTED 2026-07-27, same day — the first version of this section was WRONG.** It argued
 from "the running world has 11,553 cells vs ~3,900 in `Morrowind.esm`, so two-thirds of the world
-is missing." **That framing does not survive the learner's objection:**
+is missing." **That framing does not survive the following objection:**
 
 > *"This is a website measuring specific mods — not my entire load order. Base game and its
 > expansions are a stable base that will always be there; my load order is not stable."*
@@ -969,7 +969,7 @@ read. The API is type-agnostic so the risk is low, but the sample was not repres
 ### Scope — merchant inventories are OUT, deliberately
 
 `Cell:getAll` finds containers, not NPC inventories, so *"does a trader sell one"* is unanswered.
-**Excluded on purpose (learner's call):** merchant stock is leveled-list RNG that restocks on a
+**Excluded on purpose:** merchant stock is leveled-list RNG that restocks on a
 timer — it is not a stable surface a designer can reason about. The question this feature serves is
 **bespoke placement**: *"should I put a Fortify Personality item in the estate?"* Shop inventory is
 a different question with a different (and much noisier) answer.
@@ -1021,7 +1021,7 @@ the shared base — joining cleanly, reading as fact, with no tell.
 | 3 | one-shot or re-runnable | **re-runnable**, WHOLESALE REPLACEMENT — never a merge |
 | 4 | staleness detection | `load_order_hash`, order-sensitive |
 
-**Why refuse rather than "record it and filter at query time"** (the learner's first instinct,
+**Why refuse rather than "record it and filter at query time"** (the first instinct here,
 reversed on the argument): the load order is recorded at the **manifest** grain, the rows at the
 **placement** grain. A row `(Balmora Council Club, potion_x, 3)` carries nothing saying whether
 `Morrowind.esm` or `RepopulatedMorrowind.esm` put it there. So the only query-time filter available

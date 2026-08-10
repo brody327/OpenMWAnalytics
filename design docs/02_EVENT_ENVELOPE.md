@@ -253,7 +253,7 @@ After the shipper (what the API receives):
 
 ## 10. Check your understanding
 
-See the checkpoint quiz (posed interactively after this doc). Results logged in
-`LEARNING_LOG.md`. Key concepts to retain: envelope/payload split, event-time vs
+A design review of this contract was held before implementation; notes in
+the project journal. Key concepts: envelope/payload split, event-time vs
 processing-time, why `(session_id, seq)` is the dedup key, at-least-once +
 idempotency, generic transport vs governed vocabulary.

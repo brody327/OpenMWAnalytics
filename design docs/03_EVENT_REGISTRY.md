@@ -426,7 +426,7 @@ threaded through `handleAction`'s signature and its dispatch.
 **Why one grouped map and not three parallel ones** (`statBase` / `statModifier` / `statDamage`):
 the three numbers are only meaningful together, and parallel maps would have to be kept in sync by
 convention at every call site — a fourth field later means a fourth map rather than a key. The
-learner's framing: *consistency with the existing `statValues` shape is worth something, but not
+the call made here: *consistency with the existing `statValues` shape is worth something, but not
 when the data's own structure argues otherwise.* `statValues` is left untouched, so nothing
 existing can break.
 

@@ -15,7 +15,7 @@ generative was built. It does: `/stats/sufficiency` (Q3.6) is pure SQL and answe
 contains a remedy for a gate. Six candidate "insights" were assessed on 07-28 and **all six turned
 out to be SQL joins** — they argued *against* a model, not for one.
 
-The learner's own criterion became the spec:
+The criterion adopted for this phase:
 
 > *The LLM earns its keep only where the comparison is against something written in prose, or where
 > the interesting question is "is this meaningful" rather than "what is the number."*

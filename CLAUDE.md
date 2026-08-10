@@ -10,42 +10,33 @@ to `design docs/`.
 
 ---
 
-## ⭐ Learning Mode (highest-priority directive)
+## ⭐ Working agreement (highest-priority directive)
 
-This is a **learning project**. The developer is a **Senior SWE (~7yr)** with deep
-Angular / TypeScript and enterprise-frontend / tech-leadership strength,
-deliberately building backend / Postgres / event-driven / AI depth toward Tech
-Lead / Lead / Staff roles — *not a beginner; never explain basics unprompted.*
-The educational value matters *more* than raw output.
+Agents on this repo are held to the same bar as a senior engineer opening a PR.
+Output that merely runs is not the goal; output that can be *defended* is.
 
-**Read `openmw_analytics_learning_profile.md` (repo root) before any teaching or
-design work** — it holds the full mentor guidance: competency map (where to invest
-teaching vs. stay out of the way), the "your instinct is correct, the standard
-term is…" vocabulary pattern, the interview-feedback format, guardrails (no
-Kafka / K8s / microservices / agents without demonstrated need), and the 5-phase
-plan. On every non-trivial change:
-
-1. **Teach before implementing.** Explain the problem and the design space before
-   writing code. Do not open with a code dump.
-2. **Always explain WHY and HOW**, not just what. State tradeoffs, alternatives
-   considered, and future implications. Prefer diagrams, tables, and comparisons
-   over long prose.
-3. **Quiz at milestones — use the `teach` skill.** After a significant design
-   decision, check understanding *before* building on it. ⚠️ **Multiple choice is the
-   weakest assessment and must never be used alone** — it tests recognition, and on
-   2026-07-21 produced 6/6 from a learner who had followed almost none of it. Prefer
-   **prediction** ("what plan will this produce, and why?"), **explain-back**, and
-   **letting the learner drive**. `.claude/skills/teach/SKILL.md` has the full ladder,
-   pacing rules, and the re-teach protocol. Log honestly to `LEARNING_LOG.md`,
-   including when a score was misleading.
-4. **Small, reviewable steps.** Favor PR-sized increments over big one-shot
-   solutions. Design → discuss → decide → implement → review.
-5. **Challenge assumptions.** Act as Tech Lead / Senior Architect / Mentor, not a
-   code generator. Recommend simpler approaches when complexity is unnecessary.
-6. **Explain jargon on first use.** When a production concept appears (idempotency,
-   event-time vs processing-time, backpressure, etc.), define it briefly in place.
-
-If a task can teach *or* just be done, prefer teaching.
+1. **Design before code.** State the problem and the design space first. Name the
+   alternatives considered and why they were rejected — a decision without a
+   discarded alternative has not been made, only arrived at.
+2. **Explain WHY, not just what.** Tradeoffs and future implications belong in the
+   comment or the design doc, next to the thing they justify. Prefer tables and
+   comparisons over prose.
+3. **Small, reviewable increments.** Design → discuss → decide → implement →
+   verify. Not one large drop.
+4. **Challenge the request.** Recommend the simpler approach when the complex one
+   is not earned. **No new infrastructure or dependency without demonstrated
+   need** — specifically no Kafka, no microservices, and no agent frameworks
+   because they are fashionable.
+5. ⭐ **A check is only worth what it can detect.** Before trusting any green
+   check, ask: *would this also pass if the thing were broken?* If yes, it is
+   decoration — find an observation the failure is structurally incapable of
+   producing. This rule exists because nearly every serious defect in this
+   project was hidden behind a check that could not fail (`09 §10`, `11 §12`).
+6. **Measure before asserting.** Numbers in docs and comments are measurements,
+   not estimates. If a figure cannot be produced on demand, do not write it down.
+7. **Report faithfully.** If something is untested, say so. Never claim in-game
+   verification that did not happen — `openmw.log`, the save files and the
+   database can all be inspected directly.
 
 ---
 
@@ -121,14 +112,14 @@ it** (`ssh -i omwa-key.pem`, `--env-file api/.env`) and blocks only printing its
 contents. A guard that breaks the documented prod-access workflow gets switched off.
 
 ▶ **To get the prod `DATABASE_URL`, read the k8s secret — never a local file:**
-`ssh -i omwa-key.pem ubuntu@16.58.59.201 "sudo kubectl get secret omwa-api-secrets -o jsonpath='{.data.DATABASE_URL}' | base64 -d"`.
+`ssh -i omwa-key.pem ubuntu@<eip> "sudo kubectl get secret omwa-api-secrets -o jsonpath='{.data.DATABASE_URL}' | base64 -d"`.
 Print only host/port/db/user. `DATABASE_SSL=true` is required against RDS.
 
 ---
 
 ## Production, in one line
 
-**AWS `us-east-2` (Ohio)** · EC2 + k3s at elastic IP **`16.58.59.201`** · RDS Postgres ·
+**AWS `us-east-2` (Ohio)** · EC2 + k3s at elastic IP **`<eip>`** · RDS Postgres ·
 `api.omwanalytics.com` (API) / `omwanalytics.com` (dashboard) · `sudo kubectl` on the box (k3s.yaml
 is root-only) · **stop the instance between sessions — `t3.small` is not free.**
 

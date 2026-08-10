@@ -35,7 +35,7 @@ was already deploy-shaped — the egress design paid off here.
 
 ## 2. Target topology
 
-> ⚠️ **AWS region: `us-east-2` (Ohio). Elastic IP `16.58.59.201`.**
+> ⚠️ **AWS region: `us-east-2` (Ohio). Elastic IP `<eip>`.**
 >
 > Written here because it was not written anywhere — it appeared exactly once in this document,
 > buried inside an RDS tunnel command, and cost a debugging session on 2026-08-09 when the EC2
@@ -45,8 +45,8 @@ was already deploy-shaped — the egress design paid off here.
 >
 > If the console ever shows nothing, confirm the box is alive from outside before believing it:
 > `curl -s -o /dev/null -w '%{http_code}' https://api.omwanalytics.com/health` and
-> `ssh-keyscan -T 5 16.58.59.201`. Reverse DNS also names the region:
-> `nslookup 16.58.59.201` → `ec2-16-58-59-201.us-east-2.compute.amazonaws.com`.
+> `ssh-keyscan -T 5 <eip>`. Reverse DNS also names the region:
+> `nslookup <eip>` → `ec2-16-58-59-201.us-east-2.compute.amazonaws.com`.
 
 | Component | Host | Why |
 | --- | --- | --- |
@@ -104,7 +104,7 @@ naming them separately is most of the clarity:
 
 | Layer | Choice | Why |
 | --- | --- | --- |
-| **Stable address** | **Elastic IP** `16.58.59.201` | EC2's default public IP is a lease from a shared pool, reclaimed on every stop. An EIP is allocated to the account and remapped at will, so a DNS record survives stop/start. |
+| **Stable address** | **Elastic IP** `<eip>` | EC2's default public IP is a lease from a shared pool, reclaimed on every stop. An EIP is allocated to the account and remapped at will, so a DNS record survives stop/start. |
 | **Name** | **`omwanalytics.com`** (Cloudflare Registrar), `A api → EIP`, **DNS-only** | A real domain over `sslip.io`: certs are issued to *names*, the URL outlives the IP, and it reads as a product rather than a demo. |
 | **Routing** | **Traefik Ingress** (built into k3s) | An Ingress is a routing *rule*; the controller reconfigures itself to match. One node + one IP serves many services, dispatching by Host header. |
 | **Certificate** | **cert-manager v1.21 + Let's Encrypt** (HTTP-01) | Real trusted cert, auto-renewed. |

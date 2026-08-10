@@ -136,7 +136,7 @@ exist. Exposure separates *"everyone fails this"* from *"nobody even tries this"
 different problems with different fixes.
 
 Status: ✅ **DESIGNED 2026-07-27** as `SkillCheckDisplayed` (`03`). All four gates above were
-settled, three of them by the learner re-deriving them independently:
+settled, three of them re-derived independently from first principles:
 
 | gate | resolution |
 | --- | --- |
@@ -272,7 +272,7 @@ The module authors most consistently underestimate, and the one with the highest
 | 2.4 | Do players find the evidence needed for a check they failed? | discovery problem vs. reasoning problem | possession-at-attempt | `EvidenceCollected` × `ConfrontationAttempted.evidence_ids` | 🔵 designed |
 | 2.5 | **Is the bespoke failure prose ever read?** | **where to spend authoring bandwidth** | declined ÷ displayed, split by threshold-met (§3.2a's 2×2) | `SkillCheckDisplayed` ÷ `SkillCheckResolved` | 🔵 **designed 2026-07-27** |
 
-**2.5 is new (2026-07-25, learner's question) and is the most unusual question in the inventory** —
+**2.5 is new (2026-07-25) and is the most unusual question in the inventory** —
 it is about where to spend *human effort*, not where players struggle. If players who cannot pass a
 check mostly never attempt it, the hand-written failure branches are largely unread and that
 bandwidth belongs elsewhere. Blocked on §3.2a's exposure mechanism.

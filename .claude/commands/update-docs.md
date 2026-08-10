@@ -38,7 +38,6 @@ Do not update docs unaffected by this session's changes. Do not rewrite a doc wh
 
 - **`00_README_INDEX.md`** — the status column and "Next candidates" list, if the roadmap moved.
 - **Memory** (`MEMORY.md` + the memory dir) — for facts that must survive into a future session: verification state, decisions with their reasoning, and pending work. Prefer updating an existing memory file over adding a near-duplicate.
-- **`LEARNING_LOG.md`** — concepts taught or quizzed this session.
 
 ## Report
 

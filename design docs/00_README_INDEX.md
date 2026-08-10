@@ -1,8 +1,12 @@
 # OpenMW Analytics — Design Docs Index
 
-The modular design bible for the OpenMW Analytics platform. These are the active
-source documents; day-to-day work targets the relevant module. Every doc is
-written in **teaching style** (Why / How / Tradeoffs) — this is a learning project.
+The design bible for the OpenMW Analytics platform. These are the active source
+documents; day-to-day work targets the relevant module.
+
+Every doc is a **decision record** written Why / How / Tradeoffs: what was chosen, what
+was rejected, and what measurement settled it. A decision with no discarded alternative
+has not been made, only arrived at — so the alternatives are kept in writing, along with
+the cases where running the thing contradicted the design.
 
 ## File map
 
@@ -21,7 +25,6 @@ written in **teaching style** (Why / How / Tradeoffs) — this is a learning pro
 | `10_ANALYTICS_QUESTIONS.md` | **What the dashboard is for**: the mod-developer question inventory (4 modules) that governs which events `03` may add. | 🟡 new 2026-07-20; **Q2.5 unblocked + Q3.5/Q3.6 added 2026-07-27**; **Q3.6 mechanical half BUILT + DEPLOYED 2026-07-28** (`/stats/sufficiency`); §7 records the scope boundary (`/search` correctly has no row). **Q3.6 READ SIDE SHIPPED 2026-08-09** — `/gaps`, plus the generated layer (12) |
 | `11_SEARCH_AND_RETRIEVAL.md` | Phase 4b: hybrid (lexical + vector) search over the game corpus, and its joins to telemetry. Grain, embeddings, schema, ingest, `tsvector`, RRF fusion. | ✅ **4b COMPLETE 2026-07-27** — steps 1–8 built, merged, deployed; `/search` live and verified `mode:"hybrid"` in prod. §10a `ef_search` curve; **§10b: the stored 384 dims CANNOT demonstrate Matryoshka** (head≈mid≈tail). **§12: a test fixture was overwriting real records — `verify-corpus` added.** **§13: world placement survey designed (spiked).** **§14: ordered multi-plugin merge — base + Tribunal + Bloodmoon + CCFF, 45,542 records, local AND prod verified.** **§13: world placement survey BUILT, RUN + INGESTED 2026-07-28 — 6,797 placements, 957 areas, local AND prod**; corpus re-merged with `OAAB_Data.esm` (47,732 records, prod `verify-corpus` green). ▶ open: dims sweep, `m`/`ef_construction`, chunk-text verification |
 | `12_AI_INSIGHTS.md` | **Phase 4c**: bounded LLM insights over the aggregate layer — the one question SQL cannot answer, the mechanical guards that decide whether generated text may be published, and the review state machine. | ✅ **LIVE 2026-08-09** — first insight generated against `claude-opus-5`, reviewed, approved and rendering publicly. §5 the two retrieval defects only running it found; §6 the gate grain (`check_id` is NOT a key); §7 the provider. ⚠️ the FIRST generation was honest and useless — one dev-marker passage in, `UNCLEAR` out, and the guards would not have caught a guess |
-| `LEARNING_LOG.md` | Running log of concepts taught + quiz results, so we can revisit weak spots. | living |
 
 ## Source-of-truth rules
 

@@ -32,3 +32,12 @@ Thumbs.db
 .idea/
 *.swp
 PROJECT_DOSSIER.md
+
+# --- Personal / job-hunt material: kept locally, never published --------------
+# These document the DEVELOPER rather than the SYSTEM. A portfolio repo should
+# show engineering decisions about the SYSTEM, not notes about the author.
+project idea.md
+openmw_analytics_learning_profile.md
+design docs/LEARNING_LOG.md
+.claude/skills/teach/
+PROJECT_DOSSIER.md

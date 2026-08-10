@@ -76,7 +76,7 @@ function firstIndex(segment, re) {
 function decide(command) {
   for (const segment of segments(command)) {
     if (AWS_TXT.test(segment) && RELOCATE_VERB.test(segment)) {
-      return `This command would copy or transmit aws.txt. Nothing consumes that file, so moving it somewhere unguarded has no legitimate purpose — and it would walk around the read guard. To retrieve the prod DATABASE_URL, read the k8s secret instead: ssh -i omwa-key.pem ubuntu@16.58.59.201 "sudo kubectl get secret omwa-api-secrets -o jsonpath='{.data.DATABASE_URL}' | base64 -d"`;
+      return `This command would copy or transmit aws.txt. Nothing consumes that file, so moving it somewhere unguarded has no legitimate purpose — and it would walk around the read guard. To retrieve the prod DATABASE_URL, read the k8s secret instead: ssh -i omwa-key.pem ubuntu@<eip> "sudo kubectl get secret omwa-api-secrets -o jsonpath='{.data.DATABASE_URL}' | base64 -d"`;
     }
   }
 

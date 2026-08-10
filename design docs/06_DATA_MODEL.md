@@ -25,7 +25,7 @@ stored as mutable state.
 
 ## 2. The core decision: columns for the envelope, JSONB for the payload
 
-Four ways to store heterogeneous events. This is the decision your quiz Q3 probed.
+Four ways to store heterogeneous events. This is the load-bearing storage decision.
 
 | Approach | Idea | Verdict |
 | --- | --- | --- |
@@ -131,7 +131,7 @@ missing its identity or type is corrupt, and we'd rather reject than store garba
 
 ---
 
-## 4. Idempotent ingest (closing quiz Q2)
+## 4. Idempotent ingest
 
 The primary key **is** the dedup key from `02` §4: `(session_id, seq)`. A composite
 PK is a **uniqueness constraint** — Postgres physically refuses a second row with
@@ -246,8 +246,8 @@ None of this is built now. The single append-only table + upsert is the whole MV
 
 ## 10. Check your understanding
 
-Interactive re-quiz follows (targets the two prior gaps: idempotency and storage
-mapping, plus JSONB reasoning). Results → `LEARNING_LOG.md`.
+Design review follows (focused on the two hardest calls: idempotency and storage
+mapping, plus JSONB reasoning).
 
 ---
 

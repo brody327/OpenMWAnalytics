@@ -471,7 +471,7 @@ meaningful until real players exist (`10 §3.3`).
 ## 8. Corpus search view (`/search`, 2026-07-27)
 
 The first user-reachable surface over the pgvector corpus (`11`). Built decision-by-decision with
-the learner making each call; the four decisions are recorded here because each one has a
+each call made deliberately; the four decisions are recorded here because each one has a
 defensible alternative that a reviewer would reasonably ask about.
 
 **Files:** `app/lib/search.ts` (typed client, no snapshot fallback) · `app/search/page.tsx`
@@ -523,7 +523,7 @@ assumed: `search.ts` partitions by `text_hash` (`rn_text = 1`) alongside the par
 
 ✅ `tsc --noEmit`, `next build`, eslint, 52/52 API tests, SSR against the live local API.
 ✅ Interactive behaviour (pending state, skeleton re-suspend, Back restoring input text) confirmed
-by the learner in a browser.
+in a browser.
 ⚠️ **Prod:** see `09` — the live API pod predates `GET /search` and the deployment carries no
 `OPENAI_API_KEY`.
 
