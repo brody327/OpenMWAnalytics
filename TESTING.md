@@ -21,8 +21,13 @@ absent.
 | **Component** | The `'use client'` slice: URL⇄form state, and the React-key check | nothing | `npm test --workspace dashboard` |
 | **E2E** | Rendered pages against a running deployment | a live stack | `npm run test:e2e --workspace dashboard` |
 
-**117 API · 14 shipper · 25 component · 24 E2E — 180 tests.** `npm test` at the root runs the
+**117 API · 14 shipper · 25 component · 45 E2E — 201 tests.** `npm test` at the root runs the
 first four; E2E is separate because it needs something deployed.
+
+⭐ **A viewport is an INPUT, and the suite had only ever been run at one value of it.** The header
+set a 476px minimum width for the entire site — below that the theme toggle was off-screen and
+every page scrolled sideways. Every desktop check stayed green throughout; it was reported by a
+human on a phone. `e2e/responsive.spec.ts` now runs all five pages at 320/375/414/768.
 
 ⭐ **E2E grew 11 → 24 on 2026-08-10 for a reason worth stating: a class of bug exists that no
 other layer can see.** A timestamp formatted without an explicit locale and time zone renders

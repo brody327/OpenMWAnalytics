@@ -42,7 +42,7 @@ export default async function Home() {
   const insight = ins?.insights[0];
 
   return (
-    <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
+    <main className="mx-auto w-full max-w-[920px] px-4 pt-8 pb-16 sm:px-7 sm:pt-10 sm:pb-20">
       <header className="mb-9">
         <p className="text-xs font-semibold uppercase tracking-[1.2px] text-text-faint">
           OpenMW Analytics
@@ -70,7 +70,11 @@ export default async function Home() {
             Nothing in the loaded content can satisfy this check.
           </h2>
           <p className="mt-3 text-sm leading-relaxed text-text">
-            <code className="font-mono text-[13px]">{noRemedy.check_id}</code> asks for{' '}
+            {/* `break-all`: `ccff_jeanus_inventory_lockbox_puzzle:guess` is a single unbreakable
+                token 43 characters long. Without this it overflowed a 320px screen by ~60px and
+                dragged the whole page into horizontal scroll — ids are the one content type here
+                that cannot rely on word wrapping. */}
+            <code className="break-all font-mono text-[13px]">{noRemedy.check_id}</code> asks for{' '}
             <strong className="font-semibold">
               {noRemedy.stat} {noRemedy.threshold}
             </strong>

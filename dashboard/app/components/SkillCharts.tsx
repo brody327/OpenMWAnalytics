@@ -47,6 +47,7 @@ import {
   YAxis,
 } from 'recharts';
 import { useChartChrome } from '../lib/chartChrome';
+import { axisWidth, useChartWidth } from '../lib/useChartWidth';
 import type { CheckStat } from '../lib/stats';
 
 const titleCase = (s: string) =>
@@ -140,6 +141,9 @@ function TooltipBody({ active, payload }: { active?: boolean; payload?: { payloa
 
 export function MarginChart({ data }: { data: CheckStat[] }) {
   const c = useChartChrome();
+  // 190px was the widest fixed axis in the app — on a 320px phone it left ~90px for the bars,
+  // i.e. the chart was mostly labels. See lib/useChartWidth.
+  const { ref, width } = useChartWidth();
 
   // One row per check_id. The filtering, collapsing and ordering all live in `collapseToChecks`
   // so the grain rule is a testable function rather than a chain buried in a render.
@@ -156,6 +160,7 @@ export function MarginChart({ data }: { data: CheckStat[] }) {
   const min = Math.min(...rows.map((r) => r.margin));
 
   return (
+    <div ref={ref}>
     <ResponsiveContainer width="100%" height={Math.max(140, rows.length * 44 + 48)}>
       <BarChart
         layout="vertical"
@@ -173,7 +178,7 @@ export function MarginChart({ data }: { data: CheckStat[] }) {
         <YAxis
           type="category"
           dataKey="label"
-          width={190}
+          width={axisWidth(width, 190)}
           tick={{ fill: c.muted, fontSize: 12 }}
           stroke={c.grid}
         />
@@ -197,5 +202,6 @@ export function MarginChart({ data }: { data: CheckStat[] }) {
         </Bar>
       </BarChart>
     </ResponsiveContainer>
+    </div>
   );
 }

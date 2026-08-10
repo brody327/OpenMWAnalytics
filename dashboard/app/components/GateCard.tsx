@@ -89,7 +89,8 @@ export function GateCard({ gate, insight }: { gate: Gate; insight?: Insight }) {
           {/* ⚠️ The <h3> and the <p> immediately after it are how e2e/gaps.spec.ts reconstructs a
               gate's GRAIN to prove no two cards are the same gate. Keep them adjacent siblings
               and keep the stat/kind/threshold in that paragraph. */}
-          <h3 className="font-mono text-[13px] text-text">{gate.check_id}</h3>
+          {/* break-all — check ids are long single tokens with no wrap opportunity. */}
+          <h3 className="break-all font-mono text-[13px] text-text">{gate.check_id}</h3>
           <p className="mt-1 text-xs text-text-faint">
             {gate.stat} ({gate.stat_kind}) · threshold {gate.threshold}
           </p>

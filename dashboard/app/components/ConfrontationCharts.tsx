@@ -26,6 +26,7 @@ import {
   YAxis,
 } from 'recharts';
 import { useChartChrome } from '../lib/chartChrome';
+import { axisWidth, useChartWidth } from '../lib/useChartWidth';
 import type { ReasonStat, TopicStat } from '../lib/stats';
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
@@ -49,10 +50,14 @@ function TopicTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
 
 export function PassRateChart({ data }: { data: TopicStat[] }) {
   const c = useChartChrome();
+  // The wrapper is measured, not the viewport — see lib/useChartWidth. A fixed 140px axis left
+  // under a third of a 320px phone for the bars.
+  const { ref, width } = useChartWidth();
   if (!data.length) return <Empty />;
   const rows = data.map((d) => ({ ...d, label: titleCase(d.topic) }));
 
   return (
+    <div ref={ref}>
     <ResponsiveContainer width="100%" height={Math.max(120, rows.length * 56 + 40)}>
       <BarChart layout="vertical" data={rows} margin={{ top: 4, right: 44, bottom: 4, left: 8 }}>
         <CartesianGrid horizontal={false} stroke={c.grid} />
@@ -66,7 +71,7 @@ export function PassRateChart({ data }: { data: TopicStat[] }) {
         <YAxis
           type="category"
           dataKey="label"
-          width={140}
+          width={axisWidth(width, 140)}
           tick={{ fill: c.muted, fontSize: 12 }}
           stroke={c.grid}
         />
@@ -86,20 +91,23 @@ export function PassRateChart({ data }: { data: TopicStat[] }) {
         </Bar>
       </BarChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
 export function FailureReasonChart({ data }: { data: ReasonStat[] }) {
   const c = useChartChrome();
+  const { ref, width } = useChartWidth();
   if (!data.length) return <Empty label="No failed attempts yet." />;
   const rows = data.map((d) => ({ ...d, label: titleCase(d.reason) }));
 
   return (
+    <div ref={ref}>
     <ResponsiveContainer width="100%" height={Math.max(120, rows.length * 44 + 40)}>
       <BarChart layout="vertical" data={rows} margin={{ top: 4, right: 36, bottom: 4, left: 8 }}>
         <CartesianGrid horizontal={false} stroke={c.grid} />
         <XAxis type="number" allowDecimals={false} tick={{ fill: c.muted, fontSize: 12 }} stroke={c.grid} />
-        <YAxis type="category" dataKey="label" width={160} tick={{ fill: c.muted, fontSize: 12 }} stroke={c.grid} />
+        <YAxis type="category" dataKey="label" width={axisWidth(width, 160)} tick={{ fill: c.muted, fontSize: 12 }} stroke={c.grid} />
         <Tooltip cursor={{ fill: c.series, fillOpacity: 0.08 }} />
         <Bar dataKey="count" fill={c.series} radius={[0, 4, 4, 0]} barSize={18} isAnimationActive={false}>
           {rows.map((_, i) => (
@@ -109,6 +117,7 @@ export function FailureReasonChart({ data }: { data: ReasonStat[] }) {
         </Bar>
       </BarChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 

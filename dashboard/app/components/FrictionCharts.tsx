@@ -29,6 +29,7 @@ import {
   YAxis,
 } from 'recharts';
 import { useChartChrome } from '../lib/chartChrome';
+import { axisWidth, useChartWidth } from '../lib/useChartWidth';
 import { useDarkMode } from '../lib/useDarkMode';
 import type { AfterFailureStat } from '../lib/stats';
 
@@ -89,6 +90,7 @@ function toRows(data: AfterFailureStat[]): Row[] {
 
 export function AfterFailureChart({ data }: { data: AfterFailureStat[] }) {
   const c = useChartChrome();
+  const { ref, width } = useChartWidth();
   // ⚠️ The ordinal RAMP still branches on the theme by hand, and does not come from the token
   // palette. That is correct: these five steps were validated as a ramp — monotone lightness,
   // ΔL gaps ≥ 0.06, light end clearing the surface — and the semantic tokens are three unrelated
@@ -105,6 +107,7 @@ export function AfterFailureChart({ data }: { data: AfterFailureStat[] }) {
   }
 
   return (
+    <div ref={ref}>
     <ResponsiveContainer width="100%" height={Math.max(160, rows.length * 64 + 64)}>
       <BarChart layout="vertical" data={rows} margin={{ top: 4, right: 24, bottom: 4, left: 8 }}>
         <CartesianGrid horizontal={false} stroke={c.grid} />
@@ -117,7 +120,7 @@ export function AfterFailureChart({ data }: { data: AfterFailureStat[] }) {
         <YAxis
           type="category"
           dataKey="label"
-          width={150}
+          width={axisWidth(width, 150)}
           tick={{ fill: c.muted, fontSize: 12 }}
           stroke={c.grid}
         />
@@ -174,5 +177,6 @@ export function AfterFailureChart({ data }: { data: AfterFailureStat[] }) {
         />
       </BarChart>
     </ResponsiveContainer>
+    </div>
   );
 }

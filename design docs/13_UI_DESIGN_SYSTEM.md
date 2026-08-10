@@ -329,6 +329,71 @@ fires before inline `<head>` scripts are guaranteed to have run. It had been pas
 server HTML still seeded `data-theme` — i.e. because of the bug being fixed. Now
 `domcontentloaded`.
 
+## 9. Responsive — the header set a 476px minimum width for the whole site
+
+Reported by the author on a phone: the theme toggle was off-screen and pages scrolled sideways.
+
+**Measured across 5 pages × 5 widths.** Below 476px the toggle sat at exactly `right: 476` at
+*every* viewport, and the document scrolled by precisely `476 − viewport`. One element set a floor
+and every page inherited it.
+
+**Cause, and it is two flexbox defaults doing what they are documented to do.** The wordmark was
+`shrink-0`, so its long mono subtitle never yielded. The tab list was `flex-1 flex-wrap` — and a
+flex item's default `min-width: auto` refuses to shrink below its content, so instead of
+compressing, the tabs *wrapped into a vertical stack* beside the wordmark and pushed the toggle
+past the edge.
+
+### ⭐ No hamburger, and that is a decision rather than a shortcut
+
+A disclosure menu costs open/close state, a focus trap, `aria-expanded`, an outside-click handler
+and an escape key — to hide **four short words** behind an extra tap. A horizontally scrollable row
+keeps every destination visible and one tap away with no JavaScript at all. Reach for the menu when
+the nav outgrows a row, not before.
+
+| | layout |
+| --- | --- |
+| `< md` | row 1 `[mark + wordmark ......... toggle]`, row 2 `[tabs → scrollable]` |
+| `≥ md` | `[mark + wordmark] [tabs centred] [toggle]` |
+
+The toggle is `shrink-0` and `ml-auto` on mobile, so the control the user came for is the last
+thing that would ever be squeezed. The mono subtitle is hidden below `sm`: at 320px it is the
+single widest element in the header, and a truncated "INTERNAL TELEME…" communicates nothing.
+
+### Charts: the Y axis was a fixed pixel width chosen against a 920px container
+
+`ResponsiveContainer` makes the SVG fluid — that is the easy half. A horizontal bar chart's **Y
+axis is a fixed `width`**, and these were 140–190px. On a 320px phone a 190px axis left ~90px for
+the bars, so the chart was mostly labels and the data was 4px slivers.
+
+`lib/useChartWidth` measures **the element** with a `ResizeObserver`, not `window.innerWidth` —
+the question is "how wide is this chart", and those differ whenever it sits in a card or a grid
+column, which is every chart here. `axisWidth()` then clamps to `max(72, min(design, 40%))`.
+Measured after: labels went from ~70% of the chart to ~40%, and the −70 outlier reads as an
+outlier again.
+
+### Also fixed
+
+Long check ids (`ccff_jeanus_inventory_lockbox_puzzle:guess` — 43 unbreakable characters) got
+`break-all`; without it one token dragged the whole page into horizontal scroll. The search input
+got `min-w-0` so it can actually shrink, and its button `shrink-0`, which had been pushed off a
+320px screen. Page gutters are `px-4` below `sm`.
+
+### ⚠️ A viewport is an input, and the suite only ever ran at one value of it
+
+`e2e/responsive.spec.ts` — 21 tests over 5 pages × 4 widths, asserting no horizontal document
+scroll and that the toggle is inside the viewport, plus a paired case that every nav destination
+is still reachable at 320px (a header could satisfy every other assertion by hiding the nav) and
+that the tab strip **scrolls rather than wraps**, since wrapping is what broke it.
+
+⭐ Mutation-checked against the real failure: **16 of 21 failed against unfixed production**, all
+45 E2E pass against the fixed build.
+
+⚠️ **My detector cried wolf first, and that was worth fixing before trusting it.** It flagged 7
+elements wider than the viewport that were all inside `overflow-x-auto` containers — the tab strip
+and the wide data tables, which are *designed* to extend past the edge. An element wider than the
+screen is only a bug if nothing can scroll it. A check that reports intentional behaviour as a
+defect is one people learn to ignore.
+
 ### One defect the audit found that predates this work
 
 `Legend` paints each label in its **series colour**, and `wrapperStyle.color` does not override it —

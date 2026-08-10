@@ -62,7 +62,7 @@ export default async function GapsPage() {
   const noRemedyShown = suff?.gates.filter((g) => g.verdict === 'no_remedy').length ?? 0;
 
   return (
-    <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
+    <main className="mx-auto w-full max-w-[920px] px-4 pt-8 pb-16 sm:px-7 sm:pt-10 sm:pb-20">
       <p className="text-xs font-semibold uppercase tracking-[1.2px] text-text-faint">
         OpenMW Analytics
       </p>

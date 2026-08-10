@@ -6,7 +6,7 @@ import Link from 'next/link';
 
 export default function ModNotFound() {
   return (
-    <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
+    <main className="mx-auto w-full max-w-[920px] px-4 pt-8 pb-16 sm:px-7 sm:pt-10 sm:pb-20">
       <h1 className="font-display text-[26px] font-semibold text-text">Mod not found</h1>
       <p className="mt-2.5 text-sm text-text-muted">
         No mod with that id has reported any telemetry yet.

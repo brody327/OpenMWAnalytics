@@ -57,7 +57,10 @@ export function SearchBox({ placeholder }: { placeholder?: string }) {
         onChange={(e) => setDraft(e.target.value)}
         placeholder={placeholder ?? 'Search the game corpus…'}
         aria-label="Search the game corpus"
-        className="flex-1 rounded-lg border border-border bg-surface px-3.5 py-2.5 text-sm
+        // `min-w-0` lets the input actually shrink: a flex item defaults to `min-width:auto`,
+        // which refuses to go below its intrinsic content width and pushed the Search button off
+        // a 320px screen.
+        className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-3.5 py-2.5 text-sm
                    text-text placeholder:text-text-faint"
       />
       <button
@@ -68,8 +71,8 @@ export function SearchBox({ placeholder }: { placeholder?: string }) {
         // running a search is a neutral action, not a good or bad outcome. `text-bg` is the
         // page background token — the furthest-away neutral in whichever mode is active — so the
         // label stays legible on both blue values without a second rule.
-        className="rounded-lg bg-blue px-5 py-2.5 text-sm font-medium text-bg
-                   transition-opacity hover:opacity-90 disabled:opacity-50"
+        className="shrink-0 rounded-lg bg-blue px-4 py-2.5 text-sm font-medium text-bg
+                   transition-opacity hover:opacity-90 disabled:opacity-50 sm:px-5"
       >
         {isPending ? 'Searching…' : 'Search'}
       </button>

@@ -44,7 +44,7 @@ export default async function ModPage({
   //  - fetch succeeded but the id is not in the registry: THAT is a real 404.
   if (error) {
     return (
-      <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
+      <main className="mx-auto w-full max-w-[920px] px-4 pt-8 pb-16 sm:px-7 sm:pt-10 sm:pb-20">
         <SyntheticBanner />
         <p className="rounded-lg border border-amber-border bg-amber-bg p-4 text-[13px] text-amber">
           Could not reach the analytics API: {error}. Try again once it is back.
@@ -66,7 +66,7 @@ export default async function ModPage({
   const Dashboard = MOD_DASHBOARDS[mod.mod_id];
 
   return (
-    <main className="mx-auto w-full max-w-[920px] px-7 pt-10 pb-20">
+    <main className="mx-auto w-full max-w-[920px] px-4 pt-8 pb-16 sm:px-7 sm:pt-10 sm:pb-20">
       <header className="mb-8">
         {/* A breadcrumb, not a back button: it names WHERE it goes, so it works when the page was
             reached from a link, a bookmark, or a shared URL — cases where "back" has no meaning
